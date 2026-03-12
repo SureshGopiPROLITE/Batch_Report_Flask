@@ -188,22 +188,26 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     const res = await fetch("/api/report_data", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
-    const r = await res.json();
-    if (!r.success) return;
+    const text = await res.text();  // 👈 get raw text first
+    console.log("RAW RESPONSE:", text);  // check console for NaN
 
-    renderTable(r.data);
-    totalLabel.textContent = `Total Batch Weight (in Tons): ${r.total_weight}`;
-
-    localStorage.setItem("report_filters", JSON.stringify(payload));
-    localStorage.setItem("report_table", JSON.stringify(r.data));
-    localStorage.setItem("report_total", r.total_weight);
+    // Safe parse
+    try {
+      const r = JSON.parse(text);
+      if (!r.success) return;
+      renderTable(r.data);
+      totalLabel.textContent = `Total Batch Weight (in Tons): ${r.total_weight}`;
+    } catch(e) {
+      console.error("JSON parse failed:", e);
+      alert("Server returned invalid JSON. Check console.");
+    }
   };
-
+  
   /* ================= EXPORT ================= */
   exportBtn.addEventListener("click", async () => {
 
