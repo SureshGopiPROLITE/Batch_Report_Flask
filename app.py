@@ -1310,8 +1310,7 @@ def login():
     print(user)
 
     if user and check_password_hash(user[2], password):
-
-        if user[4] == 1:  # active?
+        if user[5] == 1:  # active?
             session.permanent = True
             session['username'] = user[1]
             session['role'] = user[3]

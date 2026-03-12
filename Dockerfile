@@ -36,6 +36,6 @@ EXPOSE 5000
 EXPOSE 8050
 
 # Optimized Gunicorn command
-CMD ["gunicorn", "app:app", "-w", "4", "-k", "gthread", "--threads", "2", "--bind", "0.0.0.0:5000", "--preload"]
+CMD ["gunicorn", "app:app", "-w", "2", "-k", "gthread", "--threads", "2", "--bind", "0.0.0.0:5000"]
 
 
