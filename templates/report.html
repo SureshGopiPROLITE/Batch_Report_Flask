@@ -1,7 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
 
-<!-- =============================== REPORT HEADER =============================== -->
 <div class="inv-navbar">
   <div class="inv-navbar-left">
     <span class="inv-app-title">Report</span>
@@ -36,7 +35,6 @@
   </div>
 </div>
 
-<!-- =============================== REPORT TABLE =============================== -->
 <div class="report-table-wrapper">
   <table class="inv-table" id="reportTable">
     <thead><tr><th>Waiting...</th></tr></thead>
@@ -44,7 +42,6 @@
   </table>
 </div>
 
-<!-- =============================== POPUP =============================== -->
 <div id="popupModal" class="popup-overlay" style="display:none;">
   <div class="popup-content">
     <h3 id="popupTitle">PLC Data</h3>
@@ -75,229 +72,288 @@
 <script>
 document.addEventListener("DOMContentLoaded", () => {
 
-  /* ================= ELEMENTS ================= */
-  const hourSelect = document.getElementById("hourSelect");
-  const fromDate   = document.getElementById("fromDate");
-  const toDate     = document.getElementById("toDate");
-  const viewBtn    = document.getElementById("viewBtn");
-  const exportBtn  = document.getElementById("exportBtn");
-  const totalLabel = document.getElementById("totalLabel");
+const hourSelect = document.getElementById("hourSelect");
+const fromDate   = document.getElementById("fromDate");
+const toDate     = document.getElementById("toDate");
+const viewBtn    = document.getElementById("viewBtn");
+const exportBtn  = document.getElementById("exportBtn");
+const totalLabel = document.getElementById("totalLabel");
 
-  const tableHead  = document.querySelector("#reportTable thead");
-  const tableBody  = document.querySelector("#reportTable tbody");
+const tableHead  = document.querySelector("#reportTable thead");
+const tableBody  = document.querySelector("#reportTable tbody");
 
-  const popup      = document.getElementById("popupModal");
-  const popupTitle = document.getElementById("popupTitle");
-  const popupHead  = document.querySelector("#popupTable thead");
-  const popupBody  = document.querySelector("#popupTable tbody");
-  const closePopup = document.getElementById("closePopup");
+const popup      = document.getElementById("popupModal");
+const popupTitle = document.getElementById("popupTitle");
+const popupHead  = document.querySelector("#popupTable thead");
+const popupBody  = document.querySelector("#popupTable tbody");
+const closePopup = document.getElementById("closePopup");
 
-  /* ================= DATE LIMIT ================= */
-  const now = new Date().toISOString().slice(0,16);
-  fromDate.max = toDate.max = now;
+const now = new Date().toISOString().slice(0,16);
+fromDate.max = toDate.max = now;
 
-  fromDate.onclick = toDate.onclick = () => hourSelect.value = "Custom";
-  hourSelect.onchange = () => {
-    if (hourSelect.value !== "Custom") {
-      fromDate.value = "";
-      toDate.value = "";
-    }
-  };
-
-  /* ================= SORTING ================= */
-  let sortState = {};
-
-  function enableSorting(head, body) {
-    head.querySelectorAll("th").forEach((th, i) => {
-      th.onclick = () => sortTable(body, i);
-      th.style.cursor = "pointer";
-    });
+fromDate.onclick = toDate.onclick = () => hourSelect.value = "Custom";
+hourSelect.onchange = () => {
+  if (hourSelect.value !== "Custom") {
+    fromDate.value = "";
+    toDate.value = "";
   }
+};
 
-  function sortTable(body, col) {
-    const rows = [...body.querySelectorAll("tr")];
-    sortState[col] = sortState[col] === "asc" ? "desc" : "asc";
+let sortState = {};
 
-    rows.sort((a, b) => {
-      let x = a.children[col].innerText.trim();
-      let y = b.children[col].innerText.trim();
-      return !isNaN(x) && !isNaN(y)
-        ? (sortState[col] === "asc" ? x - y : y - x)
-        : (sortState[col] === "asc" ? x.localeCompare(y) : y.localeCompare(x));
-    });
+function enableSorting(head, body) {
+  head.querySelectorAll("th").forEach((th, i) => {
+    th.onclick = () => sortTable(body, i);
+    th.style.cursor = "pointer";
+  });
+}
 
-    body.innerHTML = "";
-    rows.forEach(r => body.appendChild(r));
-  }
+function sortTable(body, col) {
 
-  /* ================= TABLE ================= */
-  function renderTable(data) {
-    if (!data || !data.length) {
-      tableHead.innerHTML = "<tr><th>No Data</th></tr>";
-      tableBody.innerHTML = "<tr><td>No records found</td></tr>";
-      return;
-    }
+  const rows = [...body.querySelectorAll("tr")];
 
-    const cols = Object.keys(data[0]);
-    tableHead.innerHTML = `<tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>`;
-    tableBody.innerHTML = data.map(r =>
-      `<tr onclick="openPopup('${r.BatchNo}')">
-        ${cols.map(c => `<td>${r[c]}</td>`).join("")}
-      </tr>`
-    ).join("");
+  sortState[col] = sortState[col] === "asc" ? "desc" : "asc";
 
-    setTimeout(() => enableSorting(tableHead, tableBody), 10);
-  }
+  rows.sort((a,b)=>{
 
-  /* ================= RESTORE ================= */
-  async function restoreSession() {
-    const filters = JSON.parse(localStorage.getItem("report_filters"));
-    const table   = JSON.parse(localStorage.getItem("report_table"));
-    const total   = localStorage.getItem("report_total");
+    let x = a.children[col].innerText.trim();
+    let y = b.children[col].innerText.trim();
 
-    if (filters && table) {
-      hourSelect.value = filters.hours;
-      fromDate.value = filters.from_time;
-      toDate.value = filters.to_time;
-      renderTable(table);
-      totalLabel.textContent = `Total Batch Weight (in Tons): ${total}`;
-      return;
-    }
+    x = x === "" ? 0 : x;
+    y = y === "" ? 0 : y;
 
-    viewBtn.click();
-  }
-  restoreSession();
-
-  /* ===== INITIAL DEFAULT LOAD (REPORT) ===== */
-  if (!localStorage.getItem("report_filters")) {
-    hourSelect.value = "Custom";
-    fromDate.value = "2025-05-01T00:00";
-    toDate.value = "2025-06-30T23:59";
-
-    setTimeout(() => viewBtn.click(), 200);
-  }
-
-
-
-  /* ================= VIEW ================= */
-  viewBtn.onclick = async () => {
-    const payload = {
-      hours: hourSelect.value,
-      from_time: fromDate.value,
-      to_time: toDate.value
-    };
-
-    const res = await fetch("/api/report_data", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify(payload)
-    });
-
-    const r = await res.json();
-    if (!r.success) return;
-
-    renderTable(r.data);
-    totalLabel.textContent = `Total Batch Weight (in Tons): ${r.total_weight}`;
-
-    localStorage.setItem("report_filters", JSON.stringify(payload));
-    localStorage.setItem("report_table", JSON.stringify(r.data));
-    localStorage.setItem("report_total", r.total_weight);
-  };
-
-  /* ================= EXPORT ================= */
-  exportBtn.addEventListener("click", async () => {
-
-    const hours = hourSelect.value;
-    const from_time = fromDate.value;
-    const to_time = toDate.value;
-
-    const res = await fetch("/api/export_data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hours, from_time, to_time })
-    });
-
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-
-    // Make filename safe (replace ":" with "-")
-    const safeFrom = from_time.replace(/[:T]/g, "-");
-    const safeTo = to_time.replace(/[:T]/g, "-");
-
-    const filename = `SKEW_Batchs_Report_${safeFrom}_to_${safeTo}.xlsx`;
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-
-    URL.revokeObjectURL(url);
+    return !isNaN(x) && !isNaN(y)
+      ? (sortState[col] === "asc" ? x - y : y - x)
+      : (sortState[col] === "asc"
+          ? x.localeCompare(y)
+          : y.localeCompare(x));
   });
 
+  body.innerHTML = "";
+  rows.forEach(r => body.appendChild(r));
+}
 
-  /* ================= POPUP ================= */
-  window.openPopup = async (batchNo) => {
-    popup.style.display = "flex";
-    popupTitle.textContent = `PLC Data for BatchNo: ${batchNo}`;
+function renderTable(data) {
 
-    const res = await fetch("/api/plc_data", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ batch_no: batchNo })
-    });
+  if (!data || !data.length) {
+    tableHead.innerHTML = "<tr><th>No Data</th></tr>";
+    tableBody.innerHTML = "<tr><td>No records found</td></tr>";
+    return;
+  }
 
-    const r = await res.json();
-    const data = r.data || [];
+  const cols = Object.keys(data[0]);
 
-    if (!data.length) {
-      popupHead.innerHTML = "<tr><th>No Data</th></tr>";
-      popupBody.innerHTML = "<tr><td>No PLC data found</td></tr>";
-      return;
-    }
+  tableHead.innerHTML =
+    `<tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>`;
 
-    const cols = [
-      { k:"Category", l:"Category" },
-      { k:"MaterialName", l:"Material Name" },
-      { k:"SetWeight", l:"Set Weight (Kg)" },
-      { k:"ActualWeight", l:"Actual Weight (Kg)" },
-      { k:"Difference", l:"Difference (Kg)" },
-      { k:"Tolerance", l:"Tolerance (Kg)" }
-    ];
+  tableBody.innerHTML = data.map(r =>
 
-    popupHead.innerHTML = `<tr>${cols.map(c => `<th>${c.l}</th>`).join("")}</tr>`;
-    popupBody.innerHTML = data.map(r =>
-      `<tr>${cols.map(c => `<td>${r[c.k] ?? ""}</td>`).join("")}</tr>`
-    ).join("");
+    `<tr onclick="openPopup('${r.BatchNo}')">
+      ${cols.map(c => `<td>${r[c] ?? ""}</td>`).join("")}
+    </tr>`
 
-    setTimeout(() => enableSorting(popupHead, popupBody), 10);
+  ).join("");
 
-    document.getElementById("downloadPDF").onclick = () => downloadReport("pdf", batchNo);
-    document.getElementById("downloadExcel").onclick = () => downloadReport("excel", batchNo);
+  setTimeout(()=>enableSorting(tableHead,tableBody),10);
+}
+
+/* SAFE JSON FETCH */
+async function safeFetchJSON(url, options){
+
+  const res = await fetch(url, options);
+
+  const text = await res.text();
+
+  try{
+    return JSON.parse(text);
+  }
+  catch(e){
+    console.error("Invalid JSON from API:", text);
+    alert("Server returned invalid data. Please check logs.");
+    return {success:false};
+  }
+}
+
+async function restoreSession(){
+
+  const filters = JSON.parse(localStorage.getItem("report_filters"));
+  const table   = JSON.parse(localStorage.getItem("report_table"));
+  const total   = localStorage.getItem("report_total");
+
+  if(filters && table){
+
+    hourSelect.value = filters.hours;
+    fromDate.value   = filters.from_time;
+    toDate.value     = filters.to_time;
+
+    renderTable(table);
+
+    totalLabel.textContent =
+      `Total Batch Weight (in Tons): ${total}`;
+
+    return;
+  }
+
+  viewBtn.click();
+}
+
+restoreSession();
+
+if (!localStorage.getItem("report_filters")) {
+
+  hourSelect.value = "Custom";
+
+  fromDate.value = "2025-05-01T00:00";
+  toDate.value   = "2025-06-30T23:59";
+
+  setTimeout(()=>viewBtn.click(),200);
+}
+
+/* VIEW */
+viewBtn.onclick = async ()=>{
+
+  const payload = {
+    hours: hourSelect.value,
+    from_time: fromDate.value,
+    to_time: toDate.value
   };
 
-  closePopup.onclick = () => popup.style.display = "none";
-
-});
-
-/* ================= DOWNLOAD ================= */
-async function downloadReport(type, batchNo) {
-  const endpoint = type === "pdf" ? "/api/plc_data/pdf" : "/api/plc_data/excel";
-  const ext = type === "pdf" ? "pdf" : "xlsx";
-
-  const res = await fetch(endpoint, {
+  const r = await safeFetchJSON("/api/report_data",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ batch_no: batchNo })
+    body:JSON.stringify(payload)
+  });
+
+  if(!r.success){
+    alert("Failed to load report data");
+    return;
+  }
+
+  renderTable(r.data);
+
+  totalLabel.textContent =
+    `Total Batch Weight (in Tons): ${r.total_weight ?? 0}`;
+
+  localStorage.setItem("report_filters",JSON.stringify(payload));
+  localStorage.setItem("report_table",JSON.stringify(r.data));
+  localStorage.setItem("report_total",r.total_weight);
+};
+
+/* EXPORT */
+exportBtn.onclick = async ()=>{
+
+  const payload = {
+    hours: hourSelect.value,
+    from_time: fromDate.value,
+    to_time: toDate.value
+  };
+
+  const res = await fetch("/api/export_data",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(payload)
   });
 
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
+
+  const safeFrom = payload.from_time.replace(/[:T]/g,"-");
+  const safeTo   = payload.to_time.replace(/[:T]/g,"-");
+
+  const filename =
+  `SKEW_Batchs_Report_${safeFrom}_to_${safeTo}.xlsx`;
+
   const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+
+  URL.revokeObjectURL(url);
+};
+
+/* POPUP */
+window.openPopup = async(batchNo)=>{
+
+  popup.style.display = "flex";
+
+  popupTitle.textContent =
+    `PLC Data for BatchNo: ${batchNo}`;
+
+  const r = await safeFetchJSON("/api/plc_data",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({batch_no:batchNo})
+  });
+
+  const data = r.data || [];
+
+  if(!data.length){
+
+    popupHead.innerHTML="<tr><th>No Data</th></tr>";
+    popupBody.innerHTML="<tr><td>No PLC data found</td></tr>";
+
+    return;
+  }
+
+  const cols = [
+    {k:"Category",l:"Category"},
+    {k:"MaterialName",l:"Material Name"},
+    {k:"SetWeight",l:"Set Weight (Kg)"},
+    {k:"ActualWeight",l:"Actual Weight (Kg)"},
+    {k:"Difference",l:"Difference (Kg)"},
+    {k:"Tolerance",l:"Tolerance (Kg)"}
+  ];
+
+  popupHead.innerHTML =
+    `<tr>${cols.map(c=>`<th>${c.l}</th>`).join("")}</tr>`;
+
+  popupBody.innerHTML = data.map(r=>
+
+    `<tr>
+      ${cols.map(c=>`<td>${r[c.k] ?? ""}</td>`).join("")}
+    </tr>`
+
+  ).join("");
+
+  setTimeout(()=>enableSorting(popupHead,popupBody),10);
+
+  document.getElementById("downloadPDF").onclick =
+    ()=>downloadReport("pdf",batchNo);
+
+  document.getElementById("downloadExcel").onclick =
+    ()=>downloadReport("excel",batchNo);
+};
+
+closePopup.onclick = ()=> popup.style.display="none";
+
+});
+
+async function downloadReport(type,batchNo){
+
+  const endpoint =
+    type==="pdf"?"/api/plc_data/pdf":"/api/plc_data/excel";
+
+  const ext = type==="pdf"?"pdf":"xlsx";
+
+  const res = await fetch(endpoint,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({batch_no:batchNo})
+  });
+
+  const blob = await res.blob();
+
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+
   a.href = url;
   a.download = `BatchReport_${batchNo}.${ext}`;
   a.click();
+
   URL.revokeObjectURL(url);
 }
 </script>
 
 {% endblock %}
+
