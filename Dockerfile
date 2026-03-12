@@ -2,7 +2,7 @@ FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-# Install system libraries required for WeasyPrint (ARM64 compatible)
+# Install system libraries required for WeasyPrint
 RUN apt-get update && apt-get install -y \
     wget \
     fontconfig \
@@ -28,14 +28,12 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app files
+# Copy project files
 COPY . .
 
-# Expose ports for Flask & Dash
+# Expose Flask and Dash ports
 EXPOSE 5000
 EXPOSE 8050
 
-# Optimized Gunicorn command
-CMD ["gunicorn", "app:app", "-w", "2", "-k", "gthread", "--threads", "2", "--bind", "0.0.0.0:5000"]
-
-
+# Run with single worker
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--timeout", "120"]

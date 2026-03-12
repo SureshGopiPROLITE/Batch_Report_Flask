@@ -5,11 +5,9 @@ services:
     build: .
     container_name: skew_batch
     ports:
-      - "5000:5000"   # Flask
-      - "8050:8050"   # Dash
-    volumes:
-      - .:/app        # For development hot reload
+      - "5000:5000"   # Flask main app
+      - "8050:8050"   # Dash or internal redirect
     environment:
-      FLASK_ENV: production
-      PYTHONUNBUFFERED: 1
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
     restart: always
