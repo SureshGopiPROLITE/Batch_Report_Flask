@@ -193,19 +193,24 @@ document.addEventListener("DOMContentLoaded", () => {
       body: JSON.stringify(payload)
     });
 
-    const text = await res.text();  // 👈 get raw text first
-    console.log("RAW RESPONSE:", text);  // check console for NaN
-
-    // Safe parse
+    const text = await res.text();
+    
+    let r;
     try {
-      const r = JSON.parse(text);
-      if (!r.success) return;
-      renderTable(r.data);
-      totalLabel.textContent = `Total Batch Weight (in Tons): ${r.total_weight}`;
+      r = JSON.parse(text);
     } catch(e) {
       console.error("JSON parse failed:", e);
-      alert("Server returned invalid JSON. Check console.");
+      alert("Too much data! Please narrow your date range.");
+      return;
     }
+
+    if (!r.success) return;
+    renderTable(r.data);
+    totalLabel.textContent = `Total Batch Weight (in Tons): ${r.total_weight}`;
+
+    localStorage.setItem("report_filters", JSON.stringify(payload));
+    localStorage.setItem("report_table", JSON.stringify(r.data));
+    localStorage.setItem("report_total", r.total_weight);
   };
   
   /* ================= EXPORT ================= */
