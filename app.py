@@ -11,11 +11,14 @@ import plotly
 import subprocess
 import os
 import sqlite3
+import tempfile
+from sqlalchemy import text
 
 #Modules
 from auth import authLog, authMac
 from config import sqliteCon
 from modules import monitor, main, Report, analytics_module, graphs
+from database import Sqlite
 app = Flask(__name__)
 app.secret_key = '4f3d6e9a5f4b1c8d7e6a2b3c9d0e8f1a5b7c2d4e6f9a1b3c8d0e6f2a9b1d3c4'
 
@@ -53,6 +56,7 @@ def index():
 #     success = result and "successfully updated" in result.lower()
 
 #     return jsonify(success=success, message=result)
+
 
 @app.route('/home')
 def home():
@@ -1065,7 +1069,7 @@ def settings():
     user_role = session.get("role")  # <-- Get role from session
 
     return render_template(
-        "settings.html",
+        "settingsADV.html",
         user_logged_in=user_logged_in,
         role=user_role  # <-- Pass role to frontend
     )
@@ -1297,7 +1301,134 @@ def super_admin():
     table_html = df.to_html(classes='table table-striped', index=False, escape=False, table_id='inventory-table')
     return render_template('super_admin.html', table=table_html, user_logged_in=user_logged_in)
 
+#----------------------------------
+# settings.html
+#----------------------------------
+@app.route('/export-model-excel', methods=['GET'])
+def model_excel():
+    # cursorRead, cursorWrite, engineConRead, engineConWriten, conn = Sqlite.sqlite()
+    conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
+
+    try:
+        query = "SELECT * FROM Data"
+        df = pd.read_sql_query(query, conn)
+
+        # Temporary file
+        temp_file = tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".xlsx"
+        )
+        file_path = temp_file.name
+        temp_file.close()
+
+        with pd.ExcelWriter(file_path, engine='xlsxwriter') as writer:
+            df.to_excel(
+                writer,
+                sheet_name='Sheet1',
+                index=False
+            )
+
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name="Data.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+    finally:
+        conn.close()
+
+
+@app.route('/upload-plc-db', methods=['POST'])
+def upload_plc_db():
+    conn = None
+
+    try:
+        conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+
+        if 'file' not in request.files:
+            return jsonify({
+                "success": False,
+                "message": "No file uploaded"
+            }), 400
+
+        file = request.files['file']
+
+        if not file or file.filename == '':
+            return jsonify({
+                "success": False,
+                "message": "No file selected"
+            }), 400
+
+        # Driver index from frontend
+        server = int(request.form.get("server", 0))
+        print("???????????", server)
+        # Read Excel
+        dfPlcExcel = pd.read_excel(file)
+
+        print(dfPlcExcel)
+        print("Selected Driver:", server)
+
+        # Siemens
+        if server == 0:
+            dfPlcExcel["ns"] = dfPlcExcel["ns"].astype(str)
+
+            dfPlcExcel["node_identifier"] = dfPlcExcel.apply(
+                lambda row: (
+                    f'ns={row["ns"]};s={row["channel"]}.'
+                    f'{row["device"]}.{row["Name"]}'
+                ),
+                axis=1
+            )
+
+            node_ids = dfPlcExcel["node_identifier"].to_numpy()
+
+            print("Node IDs:", node_ids)
+
+        # Insert into SQLite
+        Sqlite.insert_data_into_sqlite(
+            cursorWrite,
+            conn,
+            dfPlcExcel
+        )
+
+        print("Data inserted into SQLite table successfully.")
+
+        # Reload PLC data
+        softwaretype = request.form.get("softwaretype", "")
+
+        dfPlcdb = Sqlite.dfPlc(
+            conn,
+            softwaretype
+        )
+
+        print(dfPlcdb)
+
+        return jsonify({
+            "success": True,
+            "message": "PLC Data information successfully updated.",
+            "rows": len(dfPlcExcel)
+        })
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+    finally:
+        if conn:
+            conn.close()
 # --------------------------------- LOGIN ------------------------------------
 
 @app.route('/login', methods=['POST'])
@@ -1496,4 +1627,4 @@ def inject_user():
 
 if __name__ == '__main__':
     # Timer(1, open_browser).start()
-    app.run()
+    app.run(debug=True)
