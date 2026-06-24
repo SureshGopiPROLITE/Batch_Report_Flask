@@ -6,6 +6,8 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
 
+
+
 def sqlite():
     conn = sqlite3.connect('PLCDB2.db')
     cursorRead = conn.cursor()
@@ -14,6 +16,36 @@ def sqlite():
     engineConRead = engine.connect()
     engineConWrite = engine.connect()
     return cursorRead, cursorWrite, engineConRead, engineConWrite, conn
+
+
+
+def calculate_silo_diff(dfPlcdb: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate absolute difference (kg) and percentage between SetWeight and ActualWeight for each Silo.
+    Returns dfPlcdb with new rows added.
+    """
+    results = [
+        {
+            "Timestamp": group["Timestamp"].iloc[0],
+            "Name": name,
+            "data_type": "REAL",
+            "Value": abs(group.loc[group["Name"] == "ActualWeight", "Value"].values[0] -
+                         group.loc[group["Name"] == "SetWeight", "Value"].values[0])
+                     if name == "DiffKg" else
+                     (abs(group.loc[group["Name"] == "ActualWeight", "Value"].values[0] -
+                          group.loc[group["Name"] == "SetWeight", "Value"].values[0]) /
+                      group.loc[group["Name"] == "SetWeight", "Value"].values[0] * 100
+                      if group.loc[group["Name"] == "SetWeight", "Value"].values[0] != 0 else None),
+            "Category": silo,
+            "BatchNo": group["BatchNo"].iloc[0],
+            "DailyBatchNo": group["DailyBatchNo"].iloc[0]
+        }
+        for silo, group in dfPlcdb.groupby("Category")
+        for name in ["DiffKg", "DiffPerc"]
+        if not group[group["Name"].isin(["SetWeight", "ActualWeight"])].empty
+    ]
+
+    return pd.concat([dfPlcdb, pd.DataFrame(results)], ignore_index=True)
 
 
 def backup_database():

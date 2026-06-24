@@ -7,7 +7,7 @@
     <div class="page-header">
         <div>
             <h1>Settings</h1>
-            <p>Manage application preferences, connections and configurations</p>
+            <p>Manage general application information</p>
         </div>
     </div>
 
@@ -23,21 +23,35 @@
             <div class="card-body">
 
                 <div class="form-row">
-                    <label>Email Address</label>
+                    <label>Enter Email ID</label>
                     <div class="input-group">
-                        <input type="email" placeholder="admin@company.com">
-                        <button>Save</button>
+                        <input type="email" id="emailInput" placeholder="Enter Email ID">
+                        <button class="set-button">Save</button>
                     </div>
                 </div>
 
                 <div class="form-row">
                     <label>Report Name</label>
                     <div class="input-group">
-                        <input type="text" id="reportNameInput"
-                            placeholder="Daily Production Report">
-                        <button id="setReportNameBtn">Save</button>
+                        <input
+                            type="text"
+                            id="reportNameInput"
+                            placeholder="Enter Report Name">
+
+                        <button
+                            id="setReportNameBtn"
+                            class="set-button">
+                            Save
+                        </button>
                     </div>
                 </div>
+
+                <!-- Hidden Logo Upload Input -->
+                <input
+                    type="file"
+                    id="logoFileInput"
+                    accept="image/*"
+                    style="display:none;">
 
             </div>
         </div>
@@ -56,28 +70,44 @@
                     <label>Connection Driver</label>
 
                     <select id="driverSelect">
-                        <option>Siemens</option>
-                        <option>Rockwell</option>
+                        <option value='1'>Siemens</option>
+                        <option value="2">Rockwell</option>
                     </select>
                 </div>
 
+                
+
                 <div class="form-row">
                     <label>Station IP Address</label>
-                    <input type="text" placeholder="192.168.1.100">
+                    <input
+                        type="text"
+                        id="stationIpInput"
+                        placeholder="Enter IP Address">
                 </div>
+                
+               
 
-                <div class="connection-status">
-                    <span class="status-dot"></span>
+                <!-- <div  class="connection-status">
+                    <span id="statusDiv"class="status-dot"></span>
                     Connected
-                </div>
+                </div> -->
+                
+                
+
+                
+                           
 
                 <div class="card-actions">
-                    <button class="secondary-btn">
-                        Test Connection
+                    <button id="connectBtn" class="set-button">
+                         Connect
                     </button>
 
-                    <button>
-                        Save Settings
+                    <button id="disconnectBtn"class="secondary-btn">
+                        Disconnect
+                    </button>
+
+                    <button id="saveBtn"style="margin-left: 550px;" class="set-button"> 
+                        save
                     </button>
                 </div>
 
@@ -97,7 +127,7 @@
                 <div class="backup-info">
                     <div>
                         <span>Last Backup</span>
-                        <strong>May 22, 2025 02:35 PM</strong>
+                        <strong>May 22, 2026 02:35 PM</strong>
                     </div>
 
                     <div>
@@ -108,12 +138,14 @@
                     </div>
                 </div>
 
-                <div class="card-actions">
-                    <button>Create Backup</button>
-
-                    <button class="danger-btn">
-                        Restore Backup
+                <div class="card-actions" style = " margin-left:340px;" >
+                    <button id="dbdownload" class="set-button"> 
+                        Create Backup
                     </button>
+
+                   <!--- <button class="danger-btn">
+                        Restore Backup
+                    </button> -->
                 </div>
 
             </div>
@@ -145,13 +177,17 @@
                             <td>Report DB</td>
 
                             <td>
-                                <button>
+                                <button
+                                    id="uploadConfigBtn"
+                                    class="set-button">
                                     Upload
                                 </button>
                             </td>
 
                             <td>
-                                <button class="secondary-btn">
+                                <button
+                                    id="downloadConfigBtn"
+                                    class="secondary-btn">
                                     Download
                                 </button>
                             </td>
@@ -161,13 +197,17 @@
                             <td>Recipe DB</td>
 
                             <td>
-                                <button>
+                                <button
+                                    id="uploadRecipeBtn"
+                                    class="set-button">
                                     Upload
                                 </button>
                             </td>
 
                             <td>
-                                <button class="secondary-btn">
+                                <button
+                                    id="downloadRecipeBtn"
+                                    class="secondary-btn">
                                     Download
                                 </button>
                             </td>
@@ -177,6 +217,18 @@
 
                 </table>
 
+                <!-- Hidden Config Upload -->
+                <input
+                    type="file"
+                    id="configFileInput"
+                    accept=".xlsx,.xls"
+                    style="display:none;">
+                <!-- Hidden Recipe Upload -->
+                <input
+                    type="file"
+                    id="recipeFileInput"
+                    accept=".xlsx,.xls"
+                    style="display:none;">
             </div>
         </div>
         {% endif %}
@@ -185,4 +237,288 @@
 
 </div>
 
+<!-- ===================================== -->
+<!-- REPORT NAME + LOGO UPLOAD SCRIPT -->
+<!-- ===================================== -->
+
+<script>
+
+document.getElementById("setReportNameBtn")?.addEventListener("click", async () => {
+
+    const reportName =
+        document.getElementById("reportNameInput").value.trim();
+
+    if (!reportName) {
+        alert("Please enter Report Name");
+        return;
+    }
+
+    const uploadLogo =
+        confirm("Do you want to upload a logo image?");
+
+    const formData = new FormData();
+    formData.append("report_name", reportName);
+
+    if (uploadLogo) {
+
+        const logoInput =
+            document.getElementById("logoFileInput");
+
+        logoInput.click();
+
+        logoInput.onchange = async () => {
+
+            const file = logoInput.files[0];
+
+            if (file) {
+                formData.append("logo", file);
+            }
+
+            await sendUpdateRequest(formData);
+
+            logoInput.value = "";
+        };
+
+    } else {
+
+        await sendUpdateRequest(formData);
+
+    }
+
+});
+
+async function sendUpdateRequest(formData) {
+
+    try {
+
+        const res = await fetch("/api/settings/update_report", {
+            method: "POST",
+            body: formData
+        });
+
+        const result = await res.json();
+
+        if (result.success) {
+
+            alert("Updated Successfully!");
+
+        } else {
+
+            alert(result.error || "Update Failed");
+
+        }
+
+    } catch (err) {
+
+        console.error(err);
+        alert("Server Error");
+
+    }
+
+}
+
+</script>
+
+<!-- ===================================== -->
+<!-- CONFIGURATION MANAGEMENT SCRIPT -->
+<!-- ===================================== -->
+
+<script>
+
+// Download Configuration
+
+document.getElementById("downloadConfigBtn")?.addEventListener("click", () => {
+    window.location.href = "/export-model-excel";
+});
+
+// Upload Configuration
+
+document.getElementById("uploadConfigBtn")?.addEventListener("click", () => {
+    document.getElementById("configFileInput").click();
+});
+
+document.getElementById("configFileInput")?.addEventListener("change", async function () {
+
+    const file = this.files[0];
+
+    if (!file) return;
+
+    const server =
+        document.getElementById("driverSelect")?.selectedIndex ?? 0;
+
+    const formData = new FormData();
+
+    formData.append("file", file);
+    formData.append("server", server);
+
+    try {
+
+        const response = await fetch("/upload-plc-db", {
+            method: "POST",
+            body: formData
+        });
+
+        const result = await response.json();
+
+        alert(result.message);
+
+    } catch (error) {
+
+        console.error(error);
+        alert("Upload Failed");
+
+    }
+
+    this.value = "";
+
+});
+
+
+</script>
+
+<!-- ===================================== -->
+<!-- RECIPE MANAGEMENT SCRIPT -->
+<!-- ===================================== -->
+
+<script>
+driverSelect?.addEventListener("change", () => {
+    fetch("/api/settings/set_driver", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ driver: driverSelect.value })
+    });
+});
+
+// Download Recipe
+
+document.getElementById("downloadRecipeBtn")?.addEventListener("click", () => {
+    window.location.href = "/download-RecipeTag";
+});
+
+// Upload Recipe
+
+document.getElementById("uploadRecipeBtn")?.addEventListener("click", () => {
+    document.getElementById("recipeFileInput").click();
+});
+
+document.getElementById("recipeFileInput")?.addEventListener("change", async function () {
+
+
+
+    const file = this.files[0];
+
+    if (!file) return;
+
+
+
+    const formData = new FormData();
+
+    formData.append("file", file);
+
+
+    try {
+
+        const response = await fetch("/upload-RecipeTag", {
+            method: "POST",
+            body: formData
+        });
+
+        const result = await response.json();
+
+        alert(result.message || "Recipe Uploaded Successfully");
+
+    } catch (error) {
+
+        console.error(error);
+        alert("Recipe Upload Failed");
+
+    }
+
+    this.value = "";
+
+});
+
+// Download db
+
+document.getElementById("dbdownload")?.addEventListener("click", () => {
+    window.location.href = "/backup-database";
+});
+
+</script>
+
+<!-- ELEMENTS -->
+ 
+ <script>
+ const driverSelect = document.getElementById("driverSelect");
+ const connectBtn = document.getElementById("connectBtn");
+ const disconnectBtn = document.getElementById("disconnectBtn");
+
+</script>
+
+<!-- ======================================== -->
+<!--  Connect & Disconnect of PLC   --> 
+<!-- ======================================== -->
+<script>
+
+// Connect PLC
+document.getElementById("connectBtn")?.addEventListener("click", async () => {
+    try {
+         const driver = driverSelect.value;
+        const response = await fetch("/start_plc", {
+            method: "POST",
+            headers:{ "Content-Type": "application/json" },
+            body: JSON.stringify({ driver })
+            
+        });
+        
+
+        const data = await response.json();
+        alert(data.message || "PLC Connected Successfully");
+
+    } catch (error) {
+        console.error("Connect Error:", error);
+        alert("PLC Connection Failed");
+    }
+});
+
+// Disconnect PLC
+document.getElementById("disconnectBtn")?.addEventListener("click", async () => {
+    try {
+        const response = await fetch("/stop_plc", {
+            method: "POST"
+        });
+
+        const data = await response.json();
+        alert(data.message || "PLC Disconnected Successfully");
+
+    } catch (error) {
+        console.error("Disconnect Error:", error);
+        alert("PLC Disconnection Failed");
+    }
+});
+
+
+
+// save PLC
+
+// document.getElementById("saveBtn")?.addEventListener("click", async () => {
+
+//     try {
+//         const response = await fetch("/save_plc", {
+//             method: "POST"
+//         });
+
+//         const data = await response.json();
+
+//         alert(data.message || "PLC saved Successfully");
+//     } catch (error) {
+//         console.error(error);
+//         alert("PLC not saved  ");
+//     }
+// });
+// });
+
+
+
+</script>
 {% endblock %}

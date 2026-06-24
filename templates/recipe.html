@@ -15,12 +15,24 @@
       <button class="add-btn" id="addRowRecipe" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Add</button>
 
       <div style="display:flex;gap:0.2rem;align-items:center;">
-        <span style="font-weight:600;">Selected Recipe:</span>
+        <span style="font-weight:600;padding-right: 3px;padding-left: 3px;">Selected Recipe:</span>
         <span id="selectedRecipeLabel"
           style="background:#fff;border:1px solid #aaa;padding:0.3rem 0.5rem;border-radius:0.2rem;">--</span>
+    
+        <span style="font-weight:600;padding-right: 3px;padding-left: 3px;">Mixer No:</span>
+        
+        <input
+        type="number"
+        id="mixerNo"
+        value="1"
+        min="1"
+        step="1"
+        class="mixer-input">
+        <span style="font-weight:600;padding-left: 3px;">Download Recipe:</span>
+       
       </div>
 
-      <button class="icon-button"  title="Download"><i class="bx bxs-download"></i></button>
+      <button id="recipedownload" class="icon-button"  title="Download"><i class="bx bxs-download"></i></button>
     </div>
   </div>
 </div>
@@ -70,11 +82,22 @@
 
 </div>
 
+
+<script>
+document.getElementById("nextMixer").addEventListener("click", () => {
+    const mixer = document.getElementById("mixerNo");
+    mixer.value = parseInt(mixer.value) + 1;
+});
+</script>
+
 <script>
 document.addEventListener("DOMContentLoaded", () => {
 
   const childList = document.getElementById("childRecipes");
+
   const selectedLabel = document.getElementById("selectedRecipeLabel");
+
+  const selectedMixerLabel = document.getElementById("selectedMixerLabel");
   const tableContainer = document.getElementById("recipeTableContainer");
   const searchInput = document.getElementById("searchRecipe");
 
@@ -82,7 +105,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const deleteRecipeBtn = document.getElementById("deleteRecipe");
   const exportBtn = document.getElementById("exportBtn");
   const importBtn = document.getElementById("importBtn");
-
+  const recipedownload = document.getElementById("recipedownload")
   /* ---------------- LOAD RECIPES ---------------- */
   async function loadRecipes() {
     const res = await fetch("/api/recipes_data/get_recipes");
@@ -542,6 +565,48 @@ document.addEventListener("DOMContentLoaded", () => {
 
   loadRecipes();
 });
-</script>
 
+/* --------------- DOWNLOAD  RECIPE ---------------- */
+
+const recipedownload = document.getElementById("recipedownload");
+
+recipedownload.addEventListener("click", async () => {
+    try {
+
+        const mixerno = document.getElementById("mixerNo").value;
+        const recipe_name = document.getElementById("selectedRecipeLabel").textContent.trim();
+
+        if (recipe_name === "--" || !recipe_name) {
+            alert("Please select a recipe.");
+            return;
+        }
+
+        const response = await fetch("/download_recipe", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                mixerno,
+                recipe_name
+            })
+        });
+
+        const data = await response.json();
+
+        // Check Flask success flag
+        if (!data.success) {
+            throw new Error(data.message || "Recipe download failed");
+        }
+
+        alert(data.message);
+
+    } catch (error) {
+        console.error("Error:", error);
+        alert(error.message);   // Show actual backend error
+    }
+});
+
+
+</script>
 {% endblock %}

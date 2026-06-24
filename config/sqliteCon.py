@@ -63,101 +63,337 @@ def insertBatch(df):
         print("Dataframe is empty. No data to insert.")
         return
 
-    # Separate 'Info' category from other data
-    df_string = df[df["Category"] == "Info"].copy()
-    df = df[df["Category"] != "Info"].copy()
-    df_string = df_string.reset_index(drop=True)
+    try:
+        # Separate Info category
+        df_string = df[df["Category"] == "Info"].copy()
+        df = df[df["Category"] != "Info"].copy()
 
-    if df_string.empty:
-        print("No 'Info' category data found. Skipping batch metadata insertion.")
-    else:
-        # Pivot Info data
-        df_pivot_1 = df_string.pivot(index='BatchNo', columns='Name', values='Value')
+        df_string.reset_index(drop=True, inplace=True)
 
-        # Add Timestamp column from unique batch entries
-        df_pivot_1['TimeStamp'] = (
-            df_string.drop_duplicates(subset='BatchNo')
+        if df_string.empty:
+            print("No 'Info' category data found.")
+            return
+
+        # ---------------------------------------------------------
+        # Remove duplicate BatchNo + Name combinations
+        # ---------------------------------------------------------
+        df_string = df_string.drop_duplicates(
+            subset=["BatchNo", "Name"],
+            keep="last"
+        )
+
+        # ---------------------------------------------------------
+        # Pivot Info data safely
+        # ---------------------------------------------------------
+        df_pivot_1 = df_string.pivot_table(
+            index='BatchNo',
+            columns='Name',
+            values='Value',
+            aggfunc='first'
+        )
+
+        # Add Timestamp
+        timestamp_df = (
+            df_string
+            .drop_duplicates(subset='BatchNo')
             .set_index('BatchNo')['Timestamp']
         )
-        df_pivot_1 = df_pivot_1.reset_index()
 
-        # Define expected column order (adjust to your SQLite schema)
-        column_order = [
-            "BatchNo", "DailyBatchNo", "TimeStamp",
-            "Plant Name", "Recipe Name", "Start Date Time", "End Date Time"
+        df_pivot_1['TimeStamp'] = timestamp_df
+
+        df_pivot_1.reset_index(inplace=True)
+
+        # ---------------------------------------------------------
+        # Calculate Total Batch Weight
+        # ---------------------------------------------------------
+        if "ActualWeight" in df["Name"].values:
+
+            df_weight = (
+                df[df["Name"] == "ActualWeight"]
+                .groupby("BatchNo")["Value"]
+                .sum()
+                .reset_index()
+            )
+
+            df_weight.rename(
+                columns={"Value": "Total Batch Weight"},
+                inplace=True
+            )
+
+            df_weight["Total Batch Weight"] = (
+                df_weight["Total Batch Weight"]
+                .round(2)
+            )
+
+            df_pivot_1 = df_pivot_1.merge(
+                df_weight,
+                on="BatchNo",
+                how="left"
+            )
+
+        else:
+            df_pivot_1["Total Batch Weight"] = 0
+
+        # ---------------------------------------------------------
+        # Add DailyBatchNo if available
+        # ---------------------------------------------------------
+        if "DailyBatchNo" in df.columns:
+
+            df_daily = (
+                df[['BatchNo', 'DailyBatchNo']]
+                .drop_duplicates(subset=['BatchNo'])
+            )
+
+            df_pivot_1 = df_pivot_1.merge(
+                df_daily,
+                on='BatchNo',
+                how='left'
+            )
+
+        # ---------------------------------------------------------
+        # Check SQLite table columns
+        # ---------------------------------------------------------
+        db_cols = pd.read_sql_query(
+            'PRAGMA table_info(batches);',
+            engineConRead
+        )['name'].tolist()
+
+        print("SQLite columns:", db_cols)
+
+        # Keep only columns that exist in DB
+        insert_cols = [
+            col for col in df_pivot_1.columns
+            if col in db_cols
         ]
-        df_pivot_1 = df_pivot_1.reindex(columns=column_order, fill_value=None)
 
-        # Total Batch Weight calculation
-        df_weight = (
-            df[df["Name"] == "ActualWeight"]
-            .groupby("BatchNo")["Value"]
-            .sum()
-            .reset_index()
-        )
-        df_weight["Total Batch Weight"] = df_weight["Value"].round(2)
-        df_weight.drop(columns=["Value"], inplace=True)
+        df_insert = df_pivot_1[insert_cols]
 
-        # Add DailyBatchNo to pivoted data
-        df_daily_batch = df[['BatchNo', 'DailyBatchNo']].drop_duplicates()
-        df_pivot_1 = df_pivot_1.merge(df_daily_batch, on="BatchNo", how="left")
+        print("Columns to insert:")
+        print(df_insert.columns.tolist())
 
-        # Merge weights
-        df_pivot_1 = df_pivot_1.merge(df_weight, on="BatchNo", how="left")
+        print(df_insert.head())
 
+        # ---------------------------------------------------------
         # Insert into SQLite
-        try:
-            df_pivot_1.to_sql("batches", con=engineConWrite, if_exists="append", index=False, method='multi')
-            print("Batch metadata inserted successfully into SQLite.")
-        except Exception as e:
-            print(f"Error during SQLite insertion: {e}")
+        # ---------------------------------------------------------
+        df_insert.to_sql(
+            "batches",
+            con=engineConWrite,
+            if_exists="append",
+            index=False,
+            method='multi'
+        )
 
-    print("Batch insertion completed.")
+        print("✅ Batch metadata inserted successfully.")
 
+    except Exception as e:
+        print(f"❌ Error during batch insertion: {e}")
+
+    finally:
+        print("Batch insertion completed.")
 
 # === Material Extraction Update ===
 def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
     try:
-        # Material Index Preparation
-        dfPlcdb['MaterialIndex'] = dfPlcdb.loc[dfPlcdb['Name'] == 'MaterialName', 'Value']
-        dfPlcdb['MaterialIndex'] = dfPlcdb.groupby('Category')['MaterialIndex'].transform(lambda x: x.ffill().bfill())
-        dfPlcdb = dfPlcdb.infer_objects(copy=False)
+        print("Starting Material Extraction...")
 
-        # Filter & Pivot
-        df_filtered = dfPlcdb[dfPlcdb['Name'].isin(['ActualWeight', 'SetWeight'])].reset_index(drop=True)
-        df_pivot = df_filtered.pivot(index='MaterialIndex', columns='Name', values='Value')
-        df_pivot = df_pivot.reset_index().rename(columns={'MaterialIndex': 'MaterialName'})
+        # ---------------------------------------------------------
+        # Prepare Material Index
+        # ---------------------------------------------------------
+        dfPlcdb = dfPlcdb.copy()
 
-        # Convert ActualWeight from kg to tons
-        df_pivot['ActualWeight'] = df_pivot['ActualWeight'].div(1000).round(2)
+        # Get MaterialName values
+        dfPlcdb['MaterialIndex'] = dfPlcdb.loc[
+            dfPlcdb['Name'] == 'MaterialName',
+            'Value'
+        ]
 
-        # Load Existing MaterialData
-        existing_data = pd.read_sql('SELECT SiloNo, MaterialName, TotalExtracted FROM MaterialData', con=engineConRead)
+        # Forward/Backward fill within each category
+        dfPlcdb['MaterialIndex'] = (
+            dfPlcdb.groupby('Category')['MaterialIndex']
+            .transform(lambda x: x.ffill().bfill())
+            .infer_objects(copy=False)
+        )
 
-        # Merge and Calculate
-        df_merged = pd.merge(df_pivot, existing_data, on='MaterialName', how='inner')
-        df_merged['ActualWeight'] = pd.to_numeric(df_merged['ActualWeight'], errors='coerce').fillna(0)
-        df_merged['TotalExtracted'] = pd.to_numeric(df_merged['TotalExtracted'], errors='coerce').fillna(0)
-        df_merged['TotalWeight'] = df_merged['ActualWeight'] + df_merged['TotalExtracted']
+        # Convert to string
+        dfPlcdb['MaterialIndex'] = (
+            dfPlcdb['MaterialIndex']
+            .astype(str)
+            .str.strip()
+        )
 
+        # Remove invalid PLC values
+        invalid_values = [
+            'nan',
+            'None',
+            '',
+            '0.0',
+            '-4.253529586511731e+37',
+            '-4.253530e+37'
+        ]
+
+        dfPlcdb = dfPlcdb[
+            ~dfPlcdb['MaterialIndex'].isin(invalid_values)
+        ]
+
+        # ---------------------------------------------------------
+        # Filter Required Rows
+        # ---------------------------------------------------------
+        df_filtered = dfPlcdb[
+            dfPlcdb['Name'].isin(['ActualWeight', 'SetWeight'])
+        ].copy()
+
+        if df_filtered.empty:
+            print("No material data found.")
+            return
+
+        # ---------------------------------------------------------
+        # Find duplicates
+        # ---------------------------------------------------------
+        duplicates = df_filtered[
+            df_filtered.duplicated(
+                subset=['MaterialIndex', 'Name'],
+                keep=False
+            )
+        ]
+
+        if not duplicates.empty:
+            print("Duplicate rows found:")
+            print(
+                duplicates[
+                    ['Category', 'MaterialIndex', 'Name', 'Value']
+                ]
+            )
+
+        # Keep last duplicate
+        df_filtered = df_filtered.drop_duplicates(
+            subset=['MaterialIndex', 'Name'],
+            keep='last'
+        )
+
+        # ---------------------------------------------------------
+        # Pivot safely
+        # ---------------------------------------------------------
+        df_pivot = (
+            df_filtered.pivot_table(
+                index='MaterialIndex',
+                columns='Name',
+                values='Value',
+                aggfunc='first'
+            )
+            .reset_index()
+        )
+
+        df_pivot.rename(
+            columns={'MaterialIndex': 'MaterialName'},
+            inplace=True
+        )
+
+        # ---------------------------------------------------------
+        # Convert weights
+        # ---------------------------------------------------------
+        if 'ActualWeight' in df_pivot.columns:
+            df_pivot['ActualWeight'] = (
+                pd.to_numeric(
+                    df_pivot['ActualWeight'],
+                    errors='coerce'
+                )
+                .fillna(0)
+                .div(1000)
+                .round(2)
+            )
+        else:
+            df_pivot['ActualWeight'] = 0
+
+        # ---------------------------------------------------------
+        # Read existing SQLite data
+        # ---------------------------------------------------------
+        existing_data = pd.read_sql(
+            '''
+            SELECT
+                SiloNo,
+                MaterialName,
+                TotalExtracted
+            FROM MaterialData
+            ''',
+            con=engineConRead
+        )
+
+        existing_data['MaterialName'] = (
+            existing_data['MaterialName']
+            .astype(str)
+            .str.strip()
+        )
+
+        df_pivot['MaterialName'] = (
+            df_pivot['MaterialName']
+            .astype(str)
+            .str.strip()
+        )
+
+        print("\nPLC Materials:")
+        print(df_pivot['MaterialName'].tolist())
+
+        print("\nDB Materials:")
+        print(existing_data['MaterialName'].tolist())
+
+        # ---------------------------------------------------------
+        # Merge
+        # ---------------------------------------------------------
+        df_merged = pd.merge(
+            df_pivot,
+            existing_data,
+            on='MaterialName',
+            how='inner'
+        )
+
+        if df_merged.empty:
+            print("No matching materials found.")
+            return
+
+        df_merged['TotalExtracted'] = pd.to_numeric(
+            df_merged['TotalExtracted'],
+            errors='coerce'
+        ).fillna(0)
+
+        df_merged['TotalWeight'] = (
+            df_merged['ActualWeight'] +
+            df_merged['TotalExtracted']
+        )
+
+        print("\nMerged Data:")
         print(df_merged)
 
-        # Update SQLite Table
-        for index, row in df_merged.iterrows():
-            update_query = """
+        # ---------------------------------------------------------
+        # Update SQLite
+        # ---------------------------------------------------------
+        update_query = """
             UPDATE MaterialData
             SET TotalExtracted = ?
-            WHERE MaterialName = ?;
-            """
-            cursorWrite.execute(update_query, (row['TotalWeight'], row['MaterialName']))
+            WHERE MaterialName = ?
+        """
+
+        for _, row in df_merged.iterrows():
+            cursorWrite.execute(
+                update_query,
+                (
+                    float(row['TotalWeight']),
+                    row['MaterialName']
+                )
+            )
 
         conn.commit()
-        print("TotalWeight values successfully updated in MaterialData (SQLite).")
+
+        print(
+            "✅ TotalWeight values successfully updated "
+            "in MaterialData."
+        )
 
     except Exception as e:
-        print("Error occurred:", e)
-
-
+        import traceback
+        print("❌ Error occurred:", e)
+        traceback.print_exc()
+        
 def data_batch(conn, hours, from_time, to_time, engineConRead):
     try:
         if hours == "Custom":
