@@ -169,11 +169,13 @@ async def monitor_triggers(plc, dfPlcdb, server):
                 df_trigger_tag = globals().get(trigger_tag)
                 print(df_trigger_tag)
 
-                if df_trigger_tag is not None:
+                if df_trigger_tag is not None and not df_trigger_tag.empty:
+                    print("IN IFFF")
+
 
                     await run_logging(
                         plc,
-                        df_trigger_tag.copy(),
+                        df_trigger_tag,
                         server
                     )
 
@@ -221,7 +223,8 @@ async def run_logging(plc, dfPlcdb, server):
 
     try:
         
-
+        print("INNN")
+        print(dfPlcdb)
         dfPlcdb = dfPlcdb.reset_index(drop=True)
 
         # ---------------- SQLite / DB Setup ----------------
@@ -231,6 +234,7 @@ async def run_logging(plc, dfPlcdb, server):
             'SELECT * FROM "Info_DB";',
             engineConRead
         )
+        print(dfInfo)
 
         cursorWrite.execute(
             'SELECT COALESCE(MAX("BatchNo"), 0) FROM plc_data'
@@ -238,11 +242,13 @@ async def run_logging(plc, dfPlcdb, server):
 
         max_batch = cursorWrite.fetchone()[0] or 0
         new_batch_no = max_batch + 1
+        print(new_batch_no)
 
         # ---------------- Daily Batch Logic ----------------
         try:
             last_date = str(dfInfo.loc[7, "Info"])
             daily_batch_no = int(dfInfo.loc[8, "Info"])
+            print(last_date, daily_batch_no)
         except Exception:
             last_date = ""
             daily_batch_no = 0
@@ -254,7 +260,7 @@ async def run_logging(plc, dfPlcdb, server):
         else:
             daily_batch_no = 1
             last_date = current_date
-
+        print(daily_batch_no)
         cursorWrite.execute(
             'UPDATE Info_DB SET Info = ? WHERE Particulars = ?',
             (daily_batch_no, "Batch_no")
@@ -305,7 +311,7 @@ async def run_logging(plc, dfPlcdb, server):
             )
 
             dfPlcdb["Timestamp"] = timestamp
-
+            print(dfPlcdb)
         else:
             raise ValueError(
                 f"Invalid Driver Selected: {server}"
@@ -320,24 +326,17 @@ async def run_logging(plc, dfPlcdb, server):
         # ---------------- Post Processing ----------------
         dfPlcdb["BatchNo"] = new_batch_no
         dfPlcdb["DailyBatchNo"] = daily_batch_no
-
+        category_value = dfPlcdb.loc[(dfPlcdb['Name'] == "SetWeight") & (dfPlcdb['Value'] == 0.0), 'Category']
+        if not category_value.empty:
+            dfPlcdb = dfPlcdb[~dfPlcdb['Category'].isin(category_value)]
         dfPlcdb = Sqlite.calculate_silo_diff(dfPlcdb)
 
-        
+
+        print(dfPlcdb)
 
         # ---------------- Insert PLC Data ----------------
-        values = [
-            (
-                row["Timestamp"],
-                row["Name"],
-                row["data_type"],
-                row["Value"],
-                row["Category"],
-                row["BatchNo"],
-                row["DailyBatchNo"]
-            )
-            for _, row in dfPlcdb.iterrows()
-        ]
+        values = [(row['Timestamp'], row['Name'], row['data_type'], row['Value'], row['Category'],
+                    row['BatchNo'], row['DailyBatchNo']) for _, row in dfPlcdb.iterrows()]
 
         cursorWrite.executemany(
             '''
@@ -352,14 +351,14 @@ async def run_logging(plc, dfPlcdb, server):
 
         conn.commit()
 
-        # # ---------------- Additional Processing ----------------
-        # Sqlite.insertBatch(dfPlcdb)
-        # Sqlite.insertMaterialExtraction(
-        #     dfPlcdb,
-        #     engineConRead,
-        #     cursorWrite,
-        #     conn
-        # )
+        # ---------------- Additional Processing ----------------
+        Sqlite.insertBatch(dfPlcdb)
+        Sqlite.insertMaterialExtraction(
+            dfPlcdb,
+            engineConRead,
+            cursorWrite,
+            conn
+        )
 
         # ---------------- Logging Duration ----------------
         duration = datetime.now() - start_time

@@ -350,6 +350,7 @@ from sqlalchemy import create_engine, inspect
 
 def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
     try:
+        print("in insertMaterialExtraction")
         # Extract MaterialName values and forward-fill
         dfPlcdb['MaterialIndex'] = dfPlcdb.loc[dfPlcdb['Name'] == 'MaterialName', 'Value']
         dfPlcdb['MaterialIndex'] = dfPlcdb.groupby('Category')['MaterialIndex'].transform(lambda x: x.ffill().bfill())

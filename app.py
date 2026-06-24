@@ -651,15 +651,18 @@ def api_report_data():
 def api_plc_data():
     try:
         batch_no = request.json.get('batch_no')
+        print("INNNNNN", batch_no)
         if not batch_no:
             return jsonify({"success": False, "error": "Missing BatchNo"}), 400
 
         df_pivot, df_string, daily_batch_no, df_cal_sum = main.report_data_process(batch_no)
+        print(df_pivot)
         if isinstance(df_pivot, dict) and not df_pivot.get("success", True):
             return jsonify(df_pivot)
 
         data = df_pivot.to_dict(orient="records")
-        return jsonify({"success": True, "data": data, "daily_batch": daily_batch_no})
+        print(type(daily_batch_no))
+        return jsonify({"success": True, "data": data, "daily_batch": int(daily_batch_no)})
     except Exception as e:
         print(f"❌ API Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
