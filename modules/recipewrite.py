@@ -83,6 +83,8 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
                 except:
                     pass
 
+
+
                 return {"success": False,"message": f"PLC not in RUN mode. Current state: {status}" }
             # ---------------------------------------------------------
             # Check PLC Ready Bit

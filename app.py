@@ -19,6 +19,7 @@ from io import BytesIO
 from auth import authLog, authMac
 from config import sqliteCon
 from modules import monitor, main, Report, analytics_module, graphs, recipewrite
+from modules.monitor import log_file
 from database import Sqlite
 app = Flask(__name__)
 app.secret_key = '4f3d6e9a5f4b1c8d7e6a2b3c9d0e8f1a5b7c2d4e6f9a1b3c8d0e6f2a9b1d3c4'
@@ -122,6 +123,19 @@ def get_dashboard():
 def logs():
     return render_template('logs.html')
 
+@app.route("/api/logs", methods=["GET"])
+def get_logs():
+    try:
+        with open(log_file, "r") as f:
+            lines = f.readlines()
+        return jsonify({"logs": lines})
+    except FileNotFoundError:
+        return jsonify({"logs": []})
+
+@app.route("/api/logs/clear", methods=["POST"])
+def clear_logs():
+    open(log_file, "w").close()
+    return jsonify({"status": "cleared"})
 
 @app.route('/recipe')
 def recipe():
@@ -997,21 +1011,20 @@ def analytics_dashboard():
     try:
         print("🚀 Starting Dashboard...")
 
-        # Start Dash in a non-daemon thread
-        thread = threading.Thread(target=analytics_module.run_dashboard)
-        thread.daemon = False
+        thread = threading.Thread(
+            target=analytics_module.run_dashboard,
+            daemon=False
+        )
         thread.start()
-
-        # Detect host automatically
         server_host = request.host.split(":")[0]
-
-        # Dash always runs on port 8050
         dash_url = f"http://{server_host}:8050"
 
-        # Just return the URL (no auto browser open)
         print(f"🌐 Dashboard URL: {dash_url}")
 
-        return jsonify({"success": True, "url": dash_url})
+        return jsonify({
+            "success": True,
+            "url": dash_url
+        })
 
     except Exception as e:
         print("❌ Dashboard failed:", e)
@@ -1693,28 +1706,22 @@ def logout():
 
 @app.route('/start_plc', methods=['POST'])
 def start_plc():
-
     server = request.get_json()
     driver = server.get('driver')
     print(driver)
 
-    if not monitor.plc_running:
+    if not monitor.is_running():
         print("🔥 Starting PLC monitoring...")
-        monitor.plc_thread = Thread(target=monitor.trigger_connect,args=(int(driver),))
-        monitor.plc_thread.daemon = True
-        monitor.plc_thread.start()
-        # print(" PLC monitoring started on app start.")
+        monitor.start_monitoring(int(driver))
         return jsonify(success=True)
-    # return jsonify ({"message","PLC connection failed" })
+
+    return jsonify(success=False, message="PLC monitoring already running")
+
 
 @app.route('/stop_plc', methods=['POST'])
 def stop_plc():
-    # print(" /stop_plc endpoint called!")
-    if monitor.plc_running:
-        monitor.plc_running = False
-        # print(" PLC monitoring stopped on tab/window close.")
-    # print(" Terminating server process.")
-    # os._exit(0)
+    if monitor.is_running():
+        monitor.stop_monitoring()
     return jsonify('', 204)
 
 
