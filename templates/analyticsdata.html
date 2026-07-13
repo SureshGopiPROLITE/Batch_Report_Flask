@@ -195,6 +195,7 @@ document.addEventListener("DOMContentLoaded", () => {
       VIEW BUTTON
   ====================================================== */
   viewBtn.addEventListener("click", async () => {
+
     const hours = hourSelect.value;
     const from_time = fromDate.value;
     const to_time = toDate.value;
@@ -209,26 +210,52 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const res = await fetch("/api/analytics_data", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hours, from_time, to_time })
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        hours,
+        from_time,
+        to_time
+      })
     });
 
     const result = await res.json();
     if (!result.success) return;
 
     renderTable(result.data);
-    totalLabel.textContent = `Total Batch Weight (in Tons): ${result.total_weight}`;
 
-    // SAVE SESSION
-    sessionStorage.setItem("analytics_filters", JSON.stringify({ hours, from_time, to_time }));
-    sessionStorage.setItem("analytics_table", JSON.stringify(result.data));
-    sessionStorage.setItem("analytics_total", result.total_weight);
-  });
+    totalLabel.textContent =
+        `Total Batch Weight (in Tons): ${result.total_weight}`;
 
-  /* ======================================================
-      EXPORT BUTTON
-  ====================================================== */
-  exportBtn.addEventListener("click", async () => {
+    // Save shared filters
+    sessionStorage.setItem(
+        "analytics_filters",
+        JSON.stringify({
+            hours,
+            from_time,
+            to_time
+        })
+    );
+
+    // Save table
+    sessionStorage.setItem(
+        "analytics_table",
+        JSON.stringify(result.data)
+    );
+
+    // Save total
+    sessionStorage.setItem(
+        "analytics_total",
+        result.total_weight
+    );
+
+  });   // <-- THIS WAS MISSING
+
+/* ======================================================
+    EXPORT BUTTON
+====================================================== */
+exportBtn.addEventListener("click", async () => {
     const hours = hourSelect.value;
     const from_time = fromDate.value;
     const to_time = toDate.value;
@@ -271,6 +298,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+
+  
   /* ======================================================
       RENDER MAIN TABLE
   ====================================================== */

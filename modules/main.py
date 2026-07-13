@@ -3,22 +3,23 @@ from config import sqliteCon
 from plc_connection import pylogix
 from sqlalchemy import text
 from modules import Report
-
+from datetime import datetime, timedelta
 from itertools import product
-from datetime import datetime
 import pandas as pd
 import time
 from flask import session
 import psycopg2
 from psycopg2 import sql
+import sqlite3
+import pandas as pd
+from modules.batch_summary import calculate_batch_summary
+
 # === Logging Setup ===
 logging.basicConfig(
     filename='plc_monitor.log',
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-
-
 
 def df_split(dfPlcdb):
     try:
@@ -200,9 +201,27 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
         print("Dashboard calculations called")
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
+      
+        if hours == "Custom":
 
-        if hours != "Custom":
-            print("No batch data found in range")
+            from_time_dt = pd.to_datetime(start_timestamp)
+            to_time_dt = pd.to_datetime(end_timestamp)
+
+        elif hours in ["1 Hr", "4 Hr", "8 Hr", "12 Hr", "24 Hr"]:
+
+            hours_mapping = {
+                "1 Hr": 1,
+                "4 Hr": 4,
+                "8 Hr": 8,
+                "12 Hr": 12,
+                "24 Hr": 24
+            }
+
+            to_time_dt = datetime.now()
+            from_time_dt = to_time_dt - timedelta(hours=hours_mapping[hours])
+
+        else:
+            print("Invalid hours option")
             return {
                 "status": "success",
                 "summary": {},
@@ -211,11 +230,27 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
                 "raw_material_chart": [],
                 "calendar_chart": []
             }
-        
+
+        from_time_sql = from_time_dt.strftime("%Y-%m-%d %H:%M:%S")
+        to_time_sql = to_time_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        print("From :", from_time_sql)
+        print("To   :", to_time_sql)
+
+        # if hours != "Custom":
+        #     print("No batch data found in range")
+        #     return {
+        #         "status": "success",
+        #         "summary": {},
+        #         "line_chart": [],
+        #         "recipe_chart": [],
+        #         "raw_material_chart": [],
+        #         "calendar_chart": []
+        #     }
 
         # Ensure datetimes
-        start_dt = pd.to_datetime(start_timestamp)
-        end_dt = pd.to_datetime(end_timestamp)
+        start_dt = pd.to_datetime(from_time_sql)
+        end_dt = pd.to_datetime(to_time_sql)
         time_diff_hours = (end_dt - start_dt).total_seconds() / 3600.0
         print(f" Time difference in hours: {time_diff_hours}")
 
@@ -321,7 +356,9 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
         print("Grouped counts (preview):")
         print(grouped.head(10))
 
+
         # ---------------------- SUMMARY -----------------------
+        
         df_prod = df_plc[df_plc["Name"] == "TotalBatchActualWeight"]
         total_production_tons = round(df_prod["Value"].sum() / 1000.0, 2) if not df_prod.empty else 0.0
 
@@ -410,11 +447,3 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
 
 
 
-
-
-        
-
-        
-
-        
-        

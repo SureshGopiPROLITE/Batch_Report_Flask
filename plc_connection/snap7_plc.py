@@ -6,6 +6,7 @@ import datetime
 from datetime import datetime               
 from snap7.util import set_bool ,set_real, set_int, set_string, set_dint
 from snap7.util import get_bool, get_real, get_int, get_dint, get_string
+import re
 
 def snap7Connect(plcIP, rack, slot):
     try:
@@ -146,10 +147,19 @@ def monitor_trigger_s7(plc, df):
     
     return active, df_trigger
 
+def clean_plc_datetime(date_string):
+    if pd.isna(date_string):
+        return None
+
+    date_string = re.sub(r"\s*([:-])\s*", r"\1", str(date_string).strip())
+    date_string = re.sub(r"\s+", " ", date_string)
+
+    dt = pd.to_datetime(date_string, errors="coerce")
+    return None if pd.isna(dt) else dt.strftime("%Y-%m-%d %H:%M:%S")
+
 def read_bulk_plc_data(plc, dfPlcdb):
     dfPlcdb = dfPlcdb.copy()
     dfPlcdb["Value"] = None
-    
 
     if not plc.get_connected():
         print("⚠️ PLC not connected!")
@@ -159,7 +169,7 @@ def read_bulk_plc_data(plc, dfPlcdb):
         db_rows = dfPlcdb[dfPlcdb["db_number"] == db_number]
 
         start_offset = int(db_rows["start_offset"].min())
-        end_offset = int(db_rows["start_offset"].max()) + 6  # +6 to cover REAL/DINT size
+        end_offset = int(db_rows["start_offset"].max()) + 6
         size = end_offset - start_offset
 
         try:
@@ -168,33 +178,55 @@ def read_bulk_plc_data(plc, dfPlcdb):
             print(f"❌ Failed to read DB{db_number}: {e}")
             continue
 
-        # Decode each tag from the buffer using same logic as single read
+        # Decode each tag from the buffer
         for idx, row in db_rows.iterrows():
             local_offset = int(row["start_offset"]) - start_offset
+
             try:
-                dt = row["data_type"].upper()
-                if dt == "BOOL":
-                    dfPlcdb.at[idx, "Value"] = (raw_data[local_offset] >> int(row.get("bit_offset", 0))) & 1
-                elif dt == "REAL":
-                    dfPlcdb.at[idx, "Value"] = round(struct.unpack_from(">f", raw_data, local_offset)[0], 2)
-                elif dt == "INT":
+                data_type = row["data_type"].upper()
+
+                if data_type == "BOOL":
+                    dfPlcdb.at[idx, "Value"] = (
+                        raw_data[local_offset] >> int(row.get("bit_offset", 0))
+                    ) & 1
+
+                elif data_type == "REAL":
+                    dfPlcdb.at[idx, "Value"] = round(
+                        struct.unpack_from(">f", raw_data, local_offset)[0], 2
+                    )
+
+                elif data_type == "INT":
                     dfPlcdb.at[idx, "Value"] = struct.unpack_from(">h", raw_data, local_offset)[0]
-                elif dt == "DINT":
+
+                elif data_type == "DINT":
                     dfPlcdb.at[idx, "Value"] = struct.unpack_from(">i", raw_data, local_offset)[0]
-                elif dt == "STRING":
+
+                elif data_type == "STRING":
                     max_len = raw_data[local_offset]
                     str_len = raw_data[local_offset + 1]
+
                     if 0 < str_len <= max_len:
-                        dfPlcdb.at[idx, "Value"] = raw_data[local_offset+2:local_offset+2+str_len].decode("utf-8", errors="ignore")
+                        value = raw_data[
+                            local_offset + 2 : local_offset + 2 + str_len
+                        ].decode("utf-8", errors="ignore").strip()
+
+                        # Format PLC Date/Time
+                        if row["Name"] in ["Start Date Time", "End Date Time"]:
+                            value = clean_plc_datetime(value)
+
+                        dfPlcdb.at[idx, "Value"] = value
                     else:
-                        dfPlcdb.at[idx, "Value"] = ""
+                        dfPlcdb.at[idx, "Value"] = None
+
                 else:
                     dfPlcdb.at[idx, "Value"] = None
+
             except Exception as e:
                 print(f"⚠️ Decode error DB{db_number} offset {row['start_offset']}: {e}")
                 dfPlcdb.at[idx, "Value"] = None
-                
+
     return dfPlcdb
+
 
 
 
@@ -221,6 +253,7 @@ def write_bulk_plc_data(plc, dfPlcdb):
         max_end = start_offset
 
         for _, row in db_rows.iterrows():
+
 
             dt = str(row["data_type"]).upper()
             offset = int(row["start_offset"])

@@ -36,7 +36,7 @@ def get_db_connection_engine():
         # Separate read and write connections
         engineConRead = engine.connect()
         engineConWrite = engine.connect()
-
+          
         print("✅ SQLite SQLAlchemy engine created successfully.")
         return engine, engineConRead, engineConWrite
 
@@ -59,7 +59,7 @@ def get_cleaned_data():
     df1['Value_num'] = pd.to_numeric(df1['Value'], errors='coerce')
     df1 = df1.drop('Value', axis=1)
 
-    df1['TimeStamp_Format'] = pd.to_datetime(df1['TimeStamp'])
+    df1['TimeStamp_Format'] = pd.to_datetime(df1['TimeStamp'], format='mixed', errors='coerce')
     df1 = df1.drop(['TimeStamp', 'DataType'], axis=1)
 
     df_pivot = df1.pivot_table(
@@ -88,6 +88,8 @@ def get_cleaned_data():
         .reset_index()
         .rename(columns={'Error_%': 'Avg_Error_%'})
     )
+
+
 
     # Recipe info
     df_recipe = df.pivot_table(
@@ -134,6 +136,8 @@ def get_cleaned_data():
 
 # -------------------- DASH APP --------------------
 def run_dashboard():
+   
+    
     df_cleaned = get_cleaned_data()
 
     df_cleaned = df_cleaned.copy()
@@ -141,9 +145,13 @@ def run_dashboard():
     df_cleaned.loc[df_cleaned['Recipe Name'].str.strip() == '', 'Recipe Name'] = 'Nil'
     df_cleaned['Recipe Name'] = df_cleaned['Recipe Name'].apply(lambda x: str(x).strip())
 
-    df_cleaned['Start Date Time'] = pd.to_datetime(df_cleaned['Start Date Time'])
-    df_cleaned['End Date Time'] = pd.to_datetime(df_cleaned['End Date Time'])
+    df_cleaned['Start Date Time'] = pd.to_datetime(
+    df_cleaned['Start Date Time'],format='mixed',errors='coerce')
+    df_cleaned['End Date Time'] = pd.to_datetime(
+    df_cleaned['End Date Time'],format='mixed',errors='coerce')
     df_cleaned['Rank'] = df_cleaned['Rank'].astype(str)
+
+    df_cleaned = df_cleaned.dropna(subset=['Start Date Time', 'End Date Time'])
 
     min_date = df_cleaned['End Date Time'].dt.date.min()
     max_date = df_cleaned['End Date Time'].dt.date.max()
@@ -157,6 +165,8 @@ def run_dashboard():
             html.Div("📊", className="icon-box"),
             html.H1("Trend and Error Analysis of Recipes", className="main-title")
         ], className="header-title"),
+
+
 
         html.Div([
             html.Div([

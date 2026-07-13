@@ -6,7 +6,10 @@ from datetime import datetime
 import io
 import json
 import webbrowser
-
+from flask import Flask, render_template, send_file
+from modules.db_management import get_database_management_data, record_backup_event
+import snap7
+plc = snap7.client.Client()   # Create PLC object
 import threading
 import plotly
 import subprocess
@@ -18,7 +21,7 @@ from io import BytesIO
 #Modules
 from auth import authLog, authMac
 from config import sqliteCon
-from modules import monitor, main, Report, analytics_module, graphs, recipewrite
+from modules import monitor, main, Report, analytics_module, graphs, recipewrite, db_management
 from modules.monitor import log_file
 from database import Sqlite
 app = Flask(__name__)
@@ -118,6 +121,33 @@ def get_dashboard():
         }), 500
 
 
+from datetime import datetime
+
+@app.route("/calendar_data")
+def calendar_data():
+
+    year = request.args.get(
+        "year",
+        default=str(datetime.now().year)
+    )
+
+    conn = sqlite3.connect("PLCDB2.db")
+
+    query = """
+        SELECT
+            DATE(TimeStamp) AS date,
+            COUNT(*) AS value
+        FROM Batches
+        WHERE strftime('%Y', TimeStamp) = ?
+        GROUP BY DATE(TimeStamp)
+        ORDER BY DATE(TimeStamp)
+    """
+
+    df = pd.read_sql(query, conn, params=[year])
+
+    conn.close()
+
+    return jsonify(df.to_dict(orient="records"))
 
 @app.route('/logs')
 def logs():
@@ -1010,12 +1040,12 @@ def plc_data_analytics_EXCEL():
 def analytics_dashboard():
     try:
         print("🚀 Starting Dashboard...")
-
-        thread = threading.Thread(
-            target=analytics_module.run_dashboard,
-            daemon=False
-        )
-        thread.start()
+        
+        dashboard_thread = threading.Thread(
+                    target=analytics_module.run_dashboard,
+                    daemon=True
+                )
+        dashboard_thread.start()
         server_host = request.host.split(":")[0]
         dash_url = f"http://{server_host}:8050"
 
@@ -1087,15 +1117,40 @@ def analytics_tab(tab):
 @app.route('/settings')
 def settings():
     user_logged_in = 'username' in session
-    user_role = session.get("role")  # <-- Get role from session
+    user_role = session.get("role")
+    db_data = get_database_management_data()
 
     return render_template(
         "settingsADV.html",
         user_logged_in=user_logged_in,
-        role=user_role  # <-- Pass role to frontend
+        role=user_role,
+        db_data=db_data
     )
 
+@app.route("/api/settings/update_email", methods=["POST"])
+def update_email():
+    try:
+        email = request.form.get("email")
 
+        if not email:
+            return jsonify({
+                "success": False,
+                "error": "Email ID is required"
+            })
+
+        # Save email to database/config/file
+        print("Email:", email)
+
+        return jsonify({
+            "success": True
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
+    
 @app.route("/api/settings/update_report", methods=["POST"])
 def update_report():
     try:
@@ -1208,6 +1263,8 @@ def backup_database():
 
         if not os.path.exists(db_path):
             return {"success": False, "message": "Database file not found"}, 404
+
+        record_backup_event()   # <-- logs the timestamp for "Last Backup"
 
         return send_file(
             db_path,
@@ -1704,27 +1761,83 @@ def logout():
     session.clear()
     return redirect(url_for('home'))
 
+# ==========================================
+# Global PLC Status
+# ==========================================
+plc_connected = False
+AUTO_DRIVER = 1   # 1 = Siemens, 2 = Allen Bradley
+
+
+# ==========================================
+# Start PLC
+# ==========================================
+
 @app.route('/start_plc', methods=['POST'])
 def start_plc():
+
+    global plc_connected
+
     server = request.get_json()
-    driver = server.get('driver')
-    print(driver)
+    driver = int(server.get('driver'))
+
+    print("Selected Driver:", driver)
 
     if not monitor.is_running():
+
         print("🔥 Starting PLC monitoring...")
-        monitor.start_monitoring(int(driver))
-        return jsonify(success=True)
 
-    return jsonify(success=False, message="PLC monitoring already running")
+        monitor.start_monitoring(driver)
+
+        plc_connected = True
+
+        return jsonify(
+            success=True,
+            status="connected",
+            message="PLC Connected Successfully"
+        )
+
+    return jsonify(
+        success=True,
+        status="connected",
+        message="PLC Monitoring Already Running"
+    )
 
 
+
+# ==========================================
+# Stop PLC
+# ==========================================
 @app.route('/stop_plc', methods=['POST'])
 def stop_plc():
+
+    global plc_connected
+
     if monitor.is_running():
+
+        print("🛑 Stopping PLC monitoring...")
+
         monitor.stop_monitoring()
-    return jsonify('', 204)
 
+    plc_connected = False
 
+    return jsonify(
+        success=True,
+        status="disconnected",
+        message="PLC Disconnected Successfully"
+    )
+
+# ==========================================
+# PLC Status
+# ==========================================
+@app.route('/plc_status')
+def plc_status():
+
+    return jsonify({
+        "status": "connected"
+                  if monitor.is_running()
+                  else "disconnected"
+    })
+    
 # @app.route('/save_Plc')
 # def save_Plc():
 
@@ -1813,6 +1926,27 @@ def load_user():
 def inject_user():
     return dict(user=session.get('username'), role=session.get('role'))
 
-if __name__ == '__main__':
-    # Timer(1, open_browser).start()
-    app.run(debug=True)
+# if __name__ == '__main__':
+#     app.run(debug=True)
+
+
+
+if __name__ == "__main__":
+
+    try:
+
+        if not monitor.is_running():
+
+            print("🔥  Starting PLC Monitoring...")
+
+            monitor.start_monitoring(1)   # Siemens
+
+            plc_connected = True
+
+    except Exception as e:
+
+        print(" PLC Start Error:", e)
+
+        plc_connected = False
+
+    app.run(debug=True, use_reloader=False)

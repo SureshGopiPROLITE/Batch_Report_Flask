@@ -74,118 +74,122 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let chartKg, chartPer;
 
-  /* ======================================================
-      RESTORE / INITIAL LOAD (UPDATED)
-  ====================================================== */
-  async function restoreGraphSession() {
+ /* ======================================================
+    RESTORE / INITIAL LOAD (SYNC WITH DATA VIEW)
+====================================================== */
+async function restoreGraphSession() {
 
-    const savedFilters = JSON.parse(localStorage.getItem("analytics_graph_filters"));
-    const savedCategories = JSON.parse(localStorage.getItem("analytics_graph_categories"));
-    const savedErrorKg = JSON.parse(localStorage.getItem("analytics_graph_errorKg"));
-    const savedErrorPer = JSON.parse(localStorage.getItem("analytics_graph_errorPer"));
+  // Read the filters selected in Data View
+  let savedFilters = JSON.parse(sessionStorage.getItem("analytics_filters"));
 
-    const savedTotalKg = localStorage.getItem("analytics_graph_totalKg");
-    const savedTotalPer = localStorage.getItem("analytics_graph_totalPer");
-
-    /* ===== CASE 1: SESSION EXISTS ===== */
-    if (savedFilters && savedCategories && savedErrorKg && savedErrorPer) {
-
-      hourSelect.value = savedFilters.hours;
-      fromDate.value = savedFilters.from_time;
-      toDate.value = savedFilters.to_time;
-
-      rebuildCharts(savedCategories, savedErrorKg, savedErrorPer);
-      totalKg.textContent  = `Total Loss (in Kg): ${savedTotalKg}`;
-      totalPer.textContent = `Total Loss (in %): ${savedTotalPer}`;
-      return;
-    }
-
-    /* ===== CASE 2: FIRST LOAD DEFAULT ===== */
-    const defaultFrom = "2025-05-01T00:00";
-    const defaultTo   = "2025-06-30T23:59";
-
-    hourSelect.value = "Custom";
-    fromDate.value = defaultFrom;
-    toDate.value   = defaultTo;
-
-    const res = await fetch("/api/analytics/graph/data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        hours: "Custom",
-        from_time: defaultFrom,
-        to_time: defaultTo
-      })
-    });
-
-    const result = await res.json();
-    if (!result.data || result.data.length === 0) return;
-
-    const categories = result.data.map(d => d.Category);
-    const errorKg = result.data.map(d => d.Error_Kg);
-    const errorPer = result.data.map(d => d["Error_%"]);
-
-    rebuildCharts(categories, errorKg, errorPer);
-
-    totalKg.textContent  = `Total Loss (in Kg): ${result.total_error_kg}`;
-    totalPer.textContent = `Total Loss (in %): ${result.total_error_per}`;
-
-    localStorage.setItem("analytics_graph_filters",
-      JSON.stringify({ hours:"Custom", from_time:defaultFrom, to_time:defaultTo })
-    );
-    localStorage.setItem("analytics_graph_categories", JSON.stringify(categories));
-    localStorage.setItem("analytics_graph_errorKg", JSON.stringify(errorKg));
-    localStorage.setItem("analytics_graph_errorPer", JSON.stringify(errorPer));
-    localStorage.setItem("analytics_graph_totalKg", result.total_error_kg);
-    localStorage.setItem("analytics_graph_totalPer", result.total_error_per);
+  // Default values if Data View has never been opened
+  if (!savedFilters) {
+    savedFilters = {
+      hours: "Custom",
+      from_time: "2025-05-01T00:00",
+      to_time: "2025-06-30T23:59"
+    };
   }
 
+  // Restore controls
+  hourSelect.value = savedFilters.hours;
+  fromDate.value = savedFilters.from_time;
+  toDate.value = savedFilters.to_time;
+
+  // Load graph using the same filters
+  const res = await fetch("/api/analytics/graph/data", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(savedFilters)
+  });
+
+  const result = await res.json();
+
+  if (!result.data || result.data.length === 0) {
+    totalKg.textContent = "Total Loss (in Kg): --";
+    totalPer.textContent = "Total Loss (in %): --";
+    return;
+  }
+
+  const categories = result.data.map(d => d.Category);
+  const errorKg = result.data.map(d => d.Error_Kg);
+  const errorPer = result.data.map(d => d["Error_%"]);
+
+  rebuildCharts(categories, errorKg, errorPer);
+
+  totalKg.textContent = `Total Loss (in Kg): ${result.total_error_kg}`;
+  totalPer.textContent = `Total Loss (in %): ${result.total_error_per}`;
+
+  // Cache graph data
+  localStorage.setItem("analytics_graph_categories", JSON.stringify(categories));
+  localStorage.setItem("analytics_graph_errorKg", JSON.stringify(errorKg));
+  localStorage.setItem("analytics_graph_errorPer", JSON.stringify(errorPer));
+  localStorage.setItem("analytics_graph_totalKg", result.total_error_kg);
+  localStorage.setItem("analytics_graph_totalPer", result.total_error_per);
+}
   restoreGraphSession();
 
-  /* ======================================================
-      VIEW BUTTON (UNCHANGED)
-  ====================================================== */
-  viewBtn.addEventListener("click", async () => {
+/* ======================================================
+    VIEW BUTTON
+====================================================== */
+viewBtn.addEventListener("click", async () => {
 
-    const hours = hourSelect.value;
-    const from_time = fromDate.value;
-    const to_time = toDate.value;
+  const hours = hourSelect.value;
+  const from_time = fromDate.value;
+  const to_time = toDate.value;
 
-    if (hours === "Custom" && (!from_time || !to_time)) {
-      alert("Please select both FROM and TO for Custom range!");
-      return;
-    }
+  if (hours === "Custom" && (!from_time || !to_time)) {
+    alert("Please select both FROM and TO for Custom range!");
+    return;
+  }
 
-    const res = await fetch("/api/analytics/graph/data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hours, from_time, to_time })
-    });
-
-    const result = await res.json();
-    if (!result.data || result.data.length === 0) {
-      alert("No data found");
-      return;
-    }
-
-    const categories = result.data.map(d => d.Category);
-    const errorKg = result.data.map(d => d.Error_Kg);
-    const errorPer = result.data.map(d => d["Error_%"]);
-
-    rebuildCharts(categories, errorKg, errorPer);
-
-    totalKg.textContent  = `Total Loss (in Kg): ${result.total_error_kg}`;
-    totalPer.textContent = `Total Loss (in %): ${result.total_error_per}`;
-
-    localStorage.setItem("analytics_graph_filters",
-      JSON.stringify({ hours, from_time, to_time })
-    );
-    localStorage.setItem("analytics_graph_categories", JSON.stringify(categories));
-    localStorage.setItem("analytics_graph_errorKg", JSON.stringify(errorKg));
-    localStorage.setItem("analytics_graph_errorPer", JSON.stringify(errorPer));
-    localStorage.setItem("analytics_graph_totalKg", result.total_error_kg);
-    localStorage.setItem("analytics_graph_totalPer", result.total_error_per);
+  const res = await fetch("/api/analytics/graph/data", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      hours,
+      from_time,
+      to_time
+    })
   });
+
+  const result = await res.json();
+
+  if (!result.data || result.data.length === 0) {
+    alert("No data found");
+    return;
+  }
+
+  const categories = result.data.map(d => d.Category);
+  const errorKg = result.data.map(d => d.Error_Kg);
+  const errorPer = result.data.map(d => d["Error_%"]);
+
+  rebuildCharts(categories, errorKg, errorPer);
+
+  totalKg.textContent = `Total Loss (in Kg): ${result.total_error_kg}`;
+  totalPer.textContent = `Total Loss (in %): ${result.total_error_per}`;
+
+  // Synchronize with Data View
+sessionStorage.setItem(
+  "analytics_filters",
+  JSON.stringify({
+    hours,
+    from_time,
+    to_time
+  })
+);
+
+  // Cache graph data
+  localStorage.setItem("analytics_graph_categories", JSON.stringify(categories));
+  localStorage.setItem("analytics_graph_errorKg", JSON.stringify(errorKg));
+  localStorage.setItem("analytics_graph_errorPer", JSON.stringify(errorPer));
+  localStorage.setItem("analytics_graph_totalKg", result.total_error_kg);
+  localStorage.setItem("analytics_graph_totalPer", result.total_error_per);
+});
 
   /* ======================================================
       CHART BUILDER

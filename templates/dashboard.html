@@ -122,7 +122,8 @@
                 <div style="display: flex; justify-content: space-between; margin-right: 0.5rem;">
                     <h3 class="chart-title">Production Calendar</h3>
                     <select id="yearSelect" class="year-select">
-                        <option value="2025">2025</option>
+                        <option value="2026">2026</option>
+                        <option value="2025">2025</option>        
                     </select>
                 </div>
                 <div id="calendarChart" class="calendar-chart"></div>
@@ -181,12 +182,37 @@ toDate.addEventListener("change", () => {
     applyManual();
 });
 
-hourSelect.addEventListener("change", () => {
-    if (hourSelect.value !== "Custom") {
-        fromDate.value = "";
-        toDate.value = "";
-    }
+// hourSelect.addEventListener("change", () => {
+//     if (hourSelect.value !== "Custom") {
+//         fromDate.value = "";
+//         toDate.value = "";
+//     }
     
+//     applyManual();
+// });
+
+hourSelect.addEventListener("change", () => {
+
+    if (hourSelect.value !== "Custom") {
+
+        const now = new Date();
+        const from = new Date(now);
+
+        // Get selected hours (1 Hr -> 1, 4 Hr -> 4, etc.)
+        const hrs = parseInt(hourSelect.value);
+
+        from.setHours(now.getHours() - hrs);
+
+        // Format for datetime-local input
+        const format = (d) => {
+            const pad = n => String(n).padStart(2, "0");
+            return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        };
+
+        fromDate.value = format(from);
+        toDate.value = format(now);
+    }
+
     applyManual();
 });
 
@@ -346,7 +372,7 @@ function fetchDashboard(from, to, hours) {
                     drawLineChart(d.line_chart);
                     drawRecipeChart(d.recipe_chart);
                     drawSiloChart(d.raw_material_chart);
-                    drawCalendarChart(d.calendar_chart);
+                    syncCalendarYear();
                 });
 
             }
@@ -498,43 +524,147 @@ function drawRecipeChart(data) {
 /* =========================
        CALENDAR CHART
 ========================= */
+
 function drawCalendarChart(data) {
 
+    const calendarDiv = document.getElementById("calendarChart");
+
+    calendarDiv.innerHTML = "";
+
     if (!data || data.length === 0) {
-        document.getElementById('calendarChart').innerHTML =
-            "<p style='text-align:center;color:#888;'>No data available</p>";
+        calendarDiv.innerHTML =
+            "<p style='text-align:center;padding-top:80px;color:#888;'>No data available</p>";
         return;
     }
 
     let table = new google.visualization.DataTable();
-    table.addColumn({ type: 'date', id: 'Date' });
-    table.addColumn({ type: 'number', id: 'Value' });
 
-    data.forEach(r => {
-        let d = new Date(r.date);
+    table.addColumn('date', 'Date');
+    table.addColumn('number', 'Value');
+
+    data.forEach(row => {
+
+        let d = new Date(row.date);
+
         table.addRow([
-            new Date(d.getFullYear(), d.getMonth(), d.getDate()),
-            r.value
+            new Date(
+                d.getFullYear(),
+                d.getMonth(),
+                d.getDate()
+            ),
+            Number(row.value)
         ]);
+
     });
 
-    let chart = new google.visualization.Calendar(document.getElementById('calendarChart'));
+    let chart = new google.visualization.Calendar(calendarDiv);
 
     chart.draw(table, {
         height: 220,
-        chartArea: {
-            width: '100%',
-            height: '100%'
-        },
         calendar: {
             cellSize: 20,
-            cellPadding: 3,
-            dayOfWeekLabel: { fontSize: 12 },
-            monthLabel: { fontSize: 14 }
-        },
-
+            dayOfWeekLabel: {
+                fontSize: 12
+            },
+            monthLabel: {
+                fontSize: 14
+            }
+        }
     });
 }
+
+
+/* =========================
+   SYNC YEAR WITH DATE
+========================= */
+
+function syncCalendarYear() {
+
+    const fromDate = document.getElementById("fromDate").value;
+
+    if (!fromDate) return;
+
+    const year = fromDate.substring(0, 4);
+
+    const yearSelect = document.getElementById("yearSelect");
+
+    // Add year automatically if missing
+    if (![...yearSelect.options].some(o => o.value === year)) {
+
+        const option = document.createElement("option");
+        option.value = year;
+        option.textContent = year;
+
+        yearSelect.appendChild(option);
+    }
+
+    yearSelect.value = year;
+
+    loadCalendar(year);
+}
+
+
+/* =========================
+    LOAD CALENDAR DATA
+========================= */
+
+function loadCalendar(year) {
+
+    fetch(`/calendar_data?year=${year}`)
+        .then(response => response.json())
+        .then(data => {
+
+            console.log("Calendar Year:", year);
+            console.log(data);
+
+            drawCalendarChart(data);
+
+        })
+        .catch(error => {
+
+            console.error("Calendar Error:", error);
+
+        });
+
+}
+
+
+/* =========================
+      YEAR DROPDOWN
+========================= */
+
+document.addEventListener("DOMContentLoaded", function () {
+
+    const yearSelect = document.getElementById("yearSelect");
+
+    // Automatically use year from From Date
+    syncCalendarYear();
+
+    // Manual year selection
+    yearSelect.addEventListener("change", function () {
+
+        loadCalendar(this.value);
+
+    });
+
+});
+
+
+/* =========================
+    DATE CHANGE EVENTS
+========================= */
+
+document.getElementById("fromDate").addEventListener("change", function () {
+
+    syncCalendarYear();
+
+});
+
+document.getElementById("toDate").addEventListener("change", function () {
+
+    syncCalendarYear();
+
+});
 
 /* =========================
           BAR CHART

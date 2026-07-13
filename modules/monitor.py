@@ -11,6 +11,8 @@ import os
 import logging
 import threading
 from logging.handlers import RotatingFileHandler
+# Generate Summary
+from modules.batch_summary import calculate_batch_summary
 
 # === Logging Setup ===
 
@@ -46,6 +48,8 @@ print(f"[logging] writing to: {log_file}")
 
 # === Global Variables ===
 plc_running = False
+
+
 latest_data = {}  # Stores most recent PLC data for frontend polling
 
 
@@ -119,10 +123,11 @@ def monitor_loop(plc, dfPlcdb, server):
                 logging.exception(f"Error during monitor_triggers cycle: {e}")
 
             # Sleeps up to 5sec, but wakes immediately if stop_event is set
-            stop_event.wait(timeout=5)
+            stop_event.wait(timeout=1)
     finally:
-        plc.Close()
-        logging.info("PLC connection closed.")
+        if plc:
+         plc.disconnect()
+        logging.info("PLC Disconnected Successfully")
 
 
 def trigger_connect(server):
@@ -140,6 +145,16 @@ def trigger_connect(server):
             status = plc.get_cpu_state()
             print(status)
             value = snap7_plc.lifeCounter(plc, dfPlcdb)
+            if not value:
+                try:
+                    plc.disconnect()
+                except:
+                    pass
+
+                return {
+                    "success": False,
+                    "message": "PLC is unreachable."
+    }
 
             if status != "S7CpuStatusRun":
                 print("0")
@@ -153,7 +168,7 @@ def trigger_connect(server):
 
             # One warm-up cycle before entering the main loop
             monitor_triggers(plc, dfPlcdb, server)
-            logging.info("Connected")
+            
 
             if not value:
                 return "PLC Lifecounter Failed"
@@ -266,7 +281,7 @@ def run_logging(plc, dfPlcdb, server):
     with db_write_lock:
         try:
           
-            print(dfPlcdb)
+            
             dfPlcdb = dfPlcdb.reset_index(drop=True)
 
             # ---------------- SQLite / DB Setup ----------------
@@ -278,13 +293,12 @@ def run_logging(plc, dfPlcdb, server):
             cursorWrite.execute('SELECT COALESCE(MAX("BatchNo"), 0) FROM plc_data')
             max_batch = cursorWrite.fetchone()[0] or 0
             new_batch_no = max_batch + 1
-            print(new_batch_no)
+            
 
             # ---------------- Daily Batch Logic ----------------
             try:
                 last_date = str(dfInfo.loc[7, "Info"])
                 daily_batch_no = int(dfInfo.loc[8, "Info"])
-                print(last_date, daily_batch_no)
             except Exception:
                 last_date = ""
                 daily_batch_no = 0
@@ -296,7 +310,6 @@ def run_logging(plc, dfPlcdb, server):
             else:
                 daily_batch_no = 1
                 last_date = current_date
-            print(daily_batch_no)
 
             cursorWrite.execute(
                 'UPDATE Info_DB SET Info = ? WHERE Particulars = ?',
@@ -326,7 +339,8 @@ def run_logging(plc, dfPlcdb, server):
             elif server == 1:  # Siemens Snap7
                 dfPlcdb = snap7_plc.read_bulk_plc_data(plc, dfPlcdb)
                 dfPlcdb["Timestamp"] = timestamp
-                print(dfPlcdb)
+                
+
             else:
                 raise ValueError(f"Invalid Driver Selected: {server}")
 
@@ -346,27 +360,45 @@ def run_logging(plc, dfPlcdb, server):
 
             dfPlcdb = Sqlite.calculate_silo_diff(dfPlcdb)
             print(dfPlcdb)
-
+            
+            
+            
             # ---------------- Insert PLC Data ----------------
             values = [
                 (row['Timestamp'], row['Name'], row['data_type'], row['Value'], row['Category'],
                  row['BatchNo'], row['DailyBatchNo'])
                 for _, row in dfPlcdb.iterrows()
             ]
-
+      
+           
             cursorWrite.executemany(
                 '''
                 INSERT INTO plc_data
-                ("TimeStamp","Name","DataType",
-                 "Value","Category",
-                 "BatchNo","DailyBatchNo")
+                ("TimeStamp","Name","DataType","Value","Category","BatchNo","DailyBatchNo")
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''',
                 values
             )
+
             conn.commit()
 
+             #  call summary batch
+            calculate_batch_summary(dfPlcdb)
+        
+            
+            
             # ---------------- Additional Processing ----------------
+
+            # Convert numeric values to numeric dtype
+            numeric_types = ["REAL", "INT", "DINT", "WORD", "DWORD", "LREAL", "UINT", "UDINT"]
+
+            mask = dfPlcdb["data_type"].str.upper().isin(numeric_types)
+
+            dfPlcdb.loc[mask, "Value"] = pd.to_numeric(
+                dfPlcdb.loc[mask, "Value"],
+                errors="coerce"
+            )
+
             Sqlite.insertBatch(dfPlcdb)
             Sqlite.insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn)
 

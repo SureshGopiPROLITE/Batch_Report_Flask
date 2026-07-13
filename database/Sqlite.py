@@ -269,7 +269,7 @@ def dfPlc(conn, softwaretype):
 
 
 def insertBatch(df):
-    print("its in ")
+    
     # Establish database connection
     cursorRead, cursorWrite, engineConRead, engineConWriten, conn = sqlite()
 
@@ -291,6 +291,11 @@ def insertBatch(df):
     df_weight = df_weight.groupby("BatchNo")["Value"].sum().reset_index()
 
     # ✅ Round to 2 decimal places
+    df_weight["Value"] = pd.to_numeric(
+        df_weight["Value"],
+        errors="coerce"
+    )
+
     df_weight["Value"] = df_weight["Value"].round(2)
 
     df_weight.rename(columns={"Value": "Total Batch Weight"}, inplace=True)
@@ -301,7 +306,7 @@ def insertBatch(df):
     # Insert df_pivot_1 into the Batches table
     df_pivot_1.to_sql("Batches", con=engineConWriten, if_exists="append", index=False)
 
-    print("Data inserted successfully into Batches table!")
+   
 
 
 #recipe tag inc
@@ -350,7 +355,7 @@ from sqlalchemy import create_engine, inspect
 
 def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
     try:
-        print("in insertMaterialExtraction")
+       
         # Extract MaterialName values and forward-fill
         dfPlcdb['MaterialIndex'] = dfPlcdb.loc[dfPlcdb['Name'] == 'MaterialName', 'Value']
         dfPlcdb['MaterialIndex'] = dfPlcdb.groupby('Category')['MaterialIndex'].transform(lambda x: x.ffill().bfill())
@@ -382,6 +387,7 @@ def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
         df_merged['TotalWeight'] = df_merged['ActualWeight'] + df_merged['TotalExtracted']
 
         # Display the updated DataFrame
+        print("----------------------------------------------------------------------------")
         print(df_merged)
 
         # Assuming you have an established connection with cursor (cursorWrite), run the update query
@@ -399,7 +405,7 @@ def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
         conn.commit()
 
         print("TotalWeight values successfully updated in MaterialData table.")
-
+        print("----------------------------------------------------------------------------")
     except Exception as e:
         print("Error occurred:", e)
 

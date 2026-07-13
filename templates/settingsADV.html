@@ -6,10 +6,13 @@
 
     <div class="page-header">
         <div>
-            <h1>Settings</h1>
-            <p>Manage general application information</p>
+            <div class="inv-navbar">
+            <div class="inv-navbar-left">
+            <span class="inv-app-title">Settings</span>
         </div>
+
     </div>
+</div>
 
     <div class="settings-grid">
 
@@ -26,7 +29,7 @@
                     <label>Enter Email ID</label>
                     <div class="input-group">
                         <input type="email" id="emailInput" placeholder="Enter Email ID">
-                        <button class="set-button">Save</button>
+                        <button id="setEmailIDBtn" class="set-button">Save</button>
                     </div>
                 </div>
 
@@ -87,12 +90,10 @@
                 
                
 
-                <!-- <div  class="connection-status">
-                    <span id="statusDiv"class="status-dot"></span>
-                    Connected
-                </div> -->
-                
-                
+                <div class="connection-status">
+                    <span id="statusDot" class="status-dot" style="display:none;"></span>
+                    <span id="statusText"></span>
+                </div>
 
                 
                            
@@ -116,41 +117,54 @@
         {% endif %}
 
         <!-- DATABASE -->
-        {% if role in ['admin', 'superadmin'] %}
-        <div class="settings-card">
-            <div class="card-header">
-                <h3>🗄 Database Management</h3>
+{% if role in ['admin', 'superadmin'] %}
+<div class="settings-card">
+    <div class="card-header">
+        <h3>🗄 Database Management</h3>
+    </div>
+
+    <div class="card-body">
+
+        <div class="backup-info">
+            <div>
+                <span>Last Backup</span>
+                <strong>{{ db_data.last_backup | default('No backup yet') }}</strong>
             </div>
 
-            <div class="card-body">
+            <div class="backup-status">
+            <span>Status</span>
+            <strong class="{{ 'healthy' if db_data.status == 'Healthy'
+                            else 'warning' if db_data.status == 'Warning'
+                            else 'overdue' }}">
+                {{ db_data.status | default('Overdue') }}
+            </strong>
+        </div>
+        </div>
 
-                <div class="backup-info">
-                    <div>
-                        <span>Last Backup</span>
-                        <strong>May 22, 2026 02:35 PM</strong>
-                    </div>
+        <div class="db-storage">
+            <div class="db-storage-row">
+                <span>Storage used</span>
+                <span>{{ db_data.storage_used_gb | default(0) }} GB / {{ db_data.storage_quota_gb | default(10) }} GB</span>
+            </div>
 
-                    <div>
-                        <span>Status</span>
-                        <strong class="healthy">
-                            Healthy
-                        </strong>
-                    </div>
-                </div>
-
-                <div class="card-actions" style = " margin-left:340px;" >
-                    <button id="dbdownload" class="set-button"> 
-                        Create Backup
-                    </button>
-
-                   <!--- <button class="danger-btn">
-                        Restore Backup
-                    </button> -->
-                </div>
-
+            <div class="db-storage-track">
+                <div class="db-storage-fill" data-percent="{{ db_data.storage_percent | default(0) }}"></div>
             </div>
         </div>
-        {% endif %}
+
+        <div class="card-actions">
+            <button id="dbdownload" class="set-button"> 
+                Create Backup
+            </button>
+
+            <!--- <button class="danger-btn">
+                Restore Backup
+            </button> -->
+        </div>
+
+    </div>
+</div>
+{% endif %}
 
         <!-- CONFIGURATION -->
         {% if role == 'superadmin' %}
@@ -238,10 +252,59 @@
 </div>
 
 <!-- ===================================== -->
-<!-- REPORT NAME + LOGO UPLOAD SCRIPT -->
+<!-- EMAIL ID + REPORT NAME + LOGO UPLOAD SCRIPT -->
 <!-- ===================================== -->
 
 <script>
+
+// ==========================================
+// Save Email ID
+// ==========================================
+document.getElementById("setEmailIDBtn")?.addEventListener("click", async () => {
+
+    const email = document.getElementById("emailInput").value.trim();
+
+    if (!email) {
+        alert("Please enter Email ID");
+        return;
+    }
+
+    // Email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;   //hari@gmail.com & john123@yahoo.in
+
+    if (!emailRegex.test(email)) {
+        alert("Please enter a valid Email ID");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("email", email);
+
+    try {
+
+        const res = await fetch("/api/settings/update_email", {
+            method: "POST",
+            body: formData
+        });
+
+        const result = await res.json();
+
+        if (result.success) {
+            alert("Email ID Updated Successfully!");
+        } else {
+            alert(result.error || "Update Failed");
+        }
+
+    } catch (err) {
+
+        console.error(err);
+        alert("Server Error");
+
+    }
+
+});   
+
+// REPORT NAME + LOGO UPLOAD SCRIPT
 
 document.getElementById("setReportNameBtn")?.addEventListener("click", async () => {
 
@@ -410,7 +473,6 @@ document.getElementById("recipeFileInput")?.addEventListener("change", async fun
     if (!file) return;
 
 
-
     const formData = new FormData();
 
     formData.append("file", file);
@@ -444,63 +506,126 @@ document.getElementById("dbdownload")?.addEventListener("click", () => {
     window.location.href = "/backup-database";
 });
 
-</script>
 
-<!-- ELEMENTS -->
- 
- <script>
- const driverSelect = document.getElementById("driverSelect");
- const connectBtn = document.getElementById("connectBtn");
- const disconnectBtn = document.getElementById("disconnectBtn");
 
 </script>
 
 <!-- ======================================== -->
-<!--  Connect & Disconnect of PLC   --> 
+<!--  Connect & Disconnect of PLC   -->
 <!-- ======================================== -->
 <script>
 
-// Connect PLC
-document.getElementById("connectBtn")?.addEventListener("click", async () => {
-    try {
-         const driver = driverSelect.value;
-        const response = await fetch("/start_plc", {
-            method: "POST",
-            headers:{ "Content-Type": "application/json" },
-            body: JSON.stringify({ driver })
-            
-        });
-        
+// ========================================
+// Update PLC Status UI
+// ========================================
+function updateStatus(isConnected) {
 
+    const dot = document.getElementById("statusDot");
+    const text = document.getElementById("statusText");
+
+    dot.style.display = "inline-block";
+
+    if (isConnected) {
+        dot.className = "status-dot connected";
+        text.textContent = "Connected";
+    } else {
+        dot.className = "status-dot disconnected";
+        text.textContent = "Disconnected";
+    }
+}
+
+
+// ========================================
+// Get PLC status automatically when page loads
+// ========================================
+window.addEventListener("load", async function () {
+
+    try {
+
+        const response = await fetch("/plc_status");
         const data = await response.json();
-        alert(data.message || "PLC Connected Successfully");
+
+        console.log("PLC Status:", data);
+
+        updateStatus(data.status === "connected");
 
     } catch (error) {
-        console.error("Connect Error:", error);
-        alert("PLC Connection Failed");
+
+        console.error("PLC Status Error:", error);
+        updateStatus(false);
+
     }
+
 });
 
-// Disconnect PLC
-document.getElementById("disconnectBtn")?.addEventListener("click", async () => {
+
+// ========================================
+// Connect PLC
+// ========================================
+document.getElementById("connectBtn")?.addEventListener("click", async () => {
+
     try {
+
+        const driver = driverSelect.value;
+
+        const response = await fetch("/start_plc", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ driver })
+        });
+
+        const data = await response.json();
+
+        alert(data.message || "PLC Connected Successfully");
+
+        updateStatus(true);
+
+    } catch (error) {
+
+        console.error("Connect Error:", error);
+        alert("PLC Connection Failed");
+
+    }
+
+});
+
+
+// ========================================
+// Disconnect PLC
+// ========================================
+document.getElementById("disconnectBtn")?.addEventListener("click", async () => {
+
+    try {
+
         const response = await fetch("/stop_plc", {
             method: "POST"
         });
 
         const data = await response.json();
+
         alert(data.message || "PLC Disconnected Successfully");
 
+        updateStatus(false);
+
     } catch (error) {
+
         console.error("Disconnect Error:", error);
         alert("PLC Disconnection Failed");
+
     }
+
 });
 
+document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll('.db-storage-fill').forEach(el => {
+        const percent = el.dataset.percent || 0;
+        el.style.width = percent + '%';
+    });
+});
 
-
-// save PLC
-
+//save PLC
 // document.getElementById("saveBtn")?.addEventListener("click", async () => {
 
 //     try {
@@ -516,8 +641,6 @@ document.getElementById("disconnectBtn")?.addEventListener("click", async () => 
 //         alert("PLC not saved  ");
 //     }
 // });
-// });
-
 
 
 </script>
