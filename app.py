@@ -1256,25 +1256,54 @@ def upload_RecipeTag():
             "message": f"Error reading Excel file: {str(e)}"
         }), 500   
 
-@app.route('/backup-database', methods=['GET'])
-def backup_database():
+
+@app.route('/api/backup/custom', methods=['GET'])
+def create_custom_backup_route():
     try:
-        db_path = os.path.abspath("PLCDB2.db")
+        from_date = request.args.get("from_date") or None
+        to_date = request.args.get("to_date") or None
 
-        if not os.path.exists(db_path):
-            return {"success": False, "message": "Database file not found"}, 404
+        # If only one of the two is provided, that's ambiguous — reject.
+        if (from_date and not to_date) or (to_date and not from_date):
+            return jsonify({
+                "success": False,
+                "message": "Please provide both From Date and To Date, or leave both empty for a full backup."
+            }), 400
 
-        record_backup_event()   # <-- logs the timestamp for "Last Backup"
+        if from_date and to_date:
+            # Filtered backup
+            custom_path, custom_name = db_management.create_custom_range_backup(
+                from_date,
+                to_date
+            )
+        else:
+            # No filter provided -> full backup
+            custom_path, custom_name = db_management.create_full_backup()
 
         return send_file(
-            db_path,
+            custom_path,
             as_attachment=True,
-            download_name="PLCDB2_Backup.db",
+            download_name=custom_name,
             mimetype="application/octet-stream"
         )
 
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 400
+
+    except FileNotFoundError:
+        return jsonify({
+            "success": False,
+            "message": "Database file not found."
+        }), 404
+
     except Exception as e:
-        return {"success": False, "message": str(e)}, 500
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
     
 
 

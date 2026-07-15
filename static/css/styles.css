@@ -1839,7 +1839,7 @@ tr.editing input:focus {
 
 .settings-card{
     background:#fff;
-    height: 380px;
+    height: 410px;
     
     border:1px solid #e5e7eb;
     border-radius:12px;
@@ -1974,13 +1974,15 @@ button:hover{
     margin-top:20px;
 }
 
-/* ===========================
-   BACKUP INFO
-=========================== */
+/* ======================================================
+   DATABASE MANAGEMENT
+====================================================== */
 
+/* Backup Info */
 .backup-info{
     display:flex;
     justify-content:space-between;
+    align-items:center;
     padding:18px;
     background:#f8fafc;
     border:1px solid #e5e7eb;
@@ -1992,66 +1994,169 @@ button:hover{
     display:block;
     color:#6b7280;
     font-size:14px;
+    margin-bottom:4px;
 }
 
 .backup-info strong{
     display:block;
-    margin-top:4px;
+    font-size:17px;
+    font-weight:600;
 }
+
+/* Status */
 
 .healthy{
-    color: rgb(1, 146, 1);
-    
+    color:#16a34a;
 }
+
 .warning{
-    color: #b45309 !important;
-}
-.overdue {
-    color: #a32d2d !important;
+    color:#d97706;
 }
 
-
-.db-stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-    gap: 8px;
-    margin-bottom: 10px;
+.overdue{
+    color:#dc2626;
 }
 
 
+/* ======================================================
+   STORAGE
+====================================================== */
 
-.db-storage {
+.db-storage{
     background:#f8fafc;
     border:1px solid #e5e7eb;
     border-radius:10px;
-    padding: 18px 14px;
-    margin-bottom: 14px;
+    padding:18px;
+    margin-bottom:20px;
 }
 
-.db-storage-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 14px;
-    margin-bottom: 4px;
-    color: #5b6270;
+.db-storage-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    font-size:14px;
+    color:#4b5563;
+    margin-bottom:10px;
 }
 
-.db-storage-track {
-    width: 100%;
-    height: 10px;
-    background: #e2e4e8;
-    border-radius: 3px;
-    overflow: hidden;
+.db-storage-track{
+    width:100%;
+    height:10px;
+    background:#dfe4ea;
+    border-radius:20px;
+    overflow:hidden;
 }
 
-.db-storage-fill {
-    height: 100%;
-    background:blue;
+.db-storage-fill{
+    height:100%;
+    width:0%;
+    background:#1565c0;
+    border-radius:20px;
+    transition:width .4s ease;
 }
 
-.card-actions {
-    display: flex;
-    justify-content: center;
+
+/* ======================================================
+   CREATE BACKUP BUTTON
+====================================================== */
+
+.backup-create{
+    display:flex;
+    justify-content:center;
+    margin:20px 0;
+}
+
+
+/* ======================================================
+   BACKUP MANAGEMENT
+====================================================== */
+
+.backup-controls{
+    display:grid;
+    grid-template-columns:180px 1fr 270px;
+    gap:18px;
+    align-items:end;
+    margin-top:20px;
+}
+
+.backup-group{
+    display:flex;
+    flex-direction:column;
+}
+
+.backup-group label{
+    font-size:14px;
+    font-weight:600;
+    color:#374151;
+    margin-bottom:6px;
+}
+
+.backup-group select{
+    height:40px;
+    padding:0 12px;
+    border:1px solid #d1d5db;
+    border-radius:6px;
+    background:#fff;
+    font-size:14px;
+    cursor:pointer;
+    transition:.2s;
+}
+
+.backup-group select:focus{
+    outline:none;
+    border-color:#1565c0;
+}
+
+
+/* ======================================================
+   ACTION BUTTONS
+====================================================== */
+
+.action-buttons div{
+    display:flex;
+    gap:10px;
+}
+
+.action-buttons button{
+    min-width:110px;
+}
+
+
+/* ======================================================
+   HORIZONTAL LINE
+====================================================== */
+
+.settings-card hr{
+    border:none;
+    border-top:1px solid #e5e7eb;
+    margin:20px 0;
+}
+
+
+/* ======================================================
+   RESPONSIVE
+====================================================== */
+
+@media (max-width:900px){
+
+    .backup-info{
+        flex-direction:column;
+        align-items:flex-start;
+        gap:15px;
+    }
+
+    .backup-controls{
+        grid-template-columns:1fr;
+    }
+
+    .action-buttons div{
+        flex-wrap:wrap;
+    }
+
+    .action-buttons button{
+        flex:1;
+    }
+
 }
 /* ===========================
    TABLE

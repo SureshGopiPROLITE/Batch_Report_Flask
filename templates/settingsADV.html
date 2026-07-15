@@ -99,7 +99,8 @@
                            
 
                 <div class="card-actions">
-                    <button id="connectBtn" class="set-button">
+                    <button id="connectBtn" 
+                    class="set-button">
                          Connect
                     </button>
 
@@ -116,53 +117,105 @@
         </div>
         {% endif %}
 
-        <!-- DATABASE -->
+    <!-- ===========================
+            DATABASE MANAGEMENT
+      ===========================  -->
 {% if role in ['admin', 'superadmin'] %}
 <div class="settings-card">
+
     <div class="card-header">
         <h3>🗄 Database Management</h3>
     </div>
 
     <div class="card-body">
 
+        <!-- Backup Information -->
         <div class="backup-info">
-            <div>
+
+            <div class="backup-item">
                 <span>Last Backup</span>
-                <strong>{{ db_data.last_backup | default('No backup yet') }}</strong>
+                <strong>
+                    {{ db_data.last_backup | default('No Backup Yet') }}
+                </strong>
             </div>
 
-            <div class="backup-status">
-            <span>Status</span>
-            <strong class="{{ 'healthy' if db_data.status == 'Healthy'
-                            else 'warning' if db_data.status == 'Warning'
-                            else 'overdue' }}">
-                {{ db_data.status | default('Overdue') }}
-            </strong>
-        </div>
+            <div class="backup-item backup-status">
+
+                <span>Status</span>
+
+                <strong class="{{ 'healthy' if db_data.status == 'Healthy'
+                                else 'warning' if db_data.status == 'Warning'
+                                else 'overdue' }}">
+
+                    {{ db_data.status | default('Overdue') }}
+
+                </strong>
+
+            </div>
+
         </div>
 
+        <!-- Storage -->
         <div class="db-storage">
+
             <div class="db-storage-row">
-                <span>Storage used</span>
-                <span>{{ db_data.storage_used_gb | default(0) }} GB / {{ db_data.storage_quota_gb | default(10) }} GB</span>
+
+                <span>Storage Used</span>
+
+                <span>
+                    {{ db_data.storage_used_gb | default(0) }}
+                    GB /
+                    {{ db_data.storage_quota_gb | default(10) }}
+                    GB
+                </span>
+
             </div>
 
             <div class="db-storage-track">
-                <div class="db-storage-fill" data-percent="{{ db_data.storage_percent | default(0) }}"></div>
+
+                <div
+                    class="db-storage-fill"
+                    data-percent="{{ db_data.storage_percent | default(0) }}">
+                </div>
+
             </div>
+
         </div>
 
-        <div class="card-actions">
-            <button id="dbdownload" class="set-button"> 
-                Create Backup
-            </button>
+        <hr>
 
-            <!--- <button class="danger-btn">
-                Restore Backup
-            </button> -->
+        <!-- Custom Date Range Backup -->
+        <div class="backup-group">
+
+            <label style="margin-bottom: 15px;"><strong>Custom Date Range Backup</strong></label>
+
+
+            <div class="input-group">
+            <span style="padding:10px 5px;">From:</span>    
+                <input 
+                    
+                    type="date"
+                    id="customFromDate">
+                      
+                <span style="padding:10px 5px;">To:</span>
+
+                <input
+                    type="date"
+                    id="customToDate">
+
+                    
+                <button
+                    id="createCustomBackupBtn"
+                    class="set-button">
+                    Create Backup
+                </button>
+
+            </div>
+
         </div>
 
     </div>
+
 </div>
 {% endif %}
 
@@ -500,12 +553,35 @@ document.getElementById("recipeFileInput")?.addEventListener("change", async fun
 
 });
 
-// Download db
+/* ==========================================
+   CUSTOM DATE RANGE BACKUP
+========================================== */
 
-document.getElementById("dbdownload")?.addEventListener("click", () => {
-    window.location.href = "/backup-database";
+document.getElementById("createCustomBackupBtn")?.addEventListener("click", () => {
+
+    const fromDate = document.getElementById("customFromDate").value;
+    const toDate = document.getElementById("customToDate").value;
+
+    // Allow both empty -> full backup. Reject only-one-filled.
+    if ((fromDate && !toDate) || (!fromDate && toDate)) {
+        alert("Please select both From Date and To Date, or leave both empty for a full backup.");
+        return;
+    }
+
+    if (fromDate && toDate && toDate < fromDate) {
+        alert("To Date cannot be earlier than From Date.");
+        return;
+    }
+
+    const params = new URLSearchParams();
+    if (fromDate && toDate) {
+        params.set("from_date", fromDate);
+        params.set("to_date", toDate);
+    }
+
+    const query = params.toString();
+    window.location.href = `/api/backup/custom${query ? "?" + query : ""}`;
 });
-
 
 
 </script>
