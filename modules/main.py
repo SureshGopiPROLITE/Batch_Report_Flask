@@ -133,7 +133,7 @@ def plc_data_process(batch_no):
         state_dict = df_pivot.apply(lambda row: Report.check(row["SetWeight"], row["ActualWeight"], row["Tolerance"]), axis=1)
 
         # Define displayed columns (excluding "State")
-        column_order = ["Category", "SiloNo", "MaterialName", "SetWeight", "ActualWeight", "Difference", "Tolerance"]
+        column_order = ["Category", "SiloNo", "MaterialName", "SetWeight", "ActualWeight", "Difference", "Tolerance", "CoarseSpeed", "FineSpeed"]
         df_pivot = df_pivot[column_order]  # Only include these columns in the table
         df_pivot["SiloNo"] = df_pivot["SiloNo"].astype(int)
 
@@ -186,7 +186,7 @@ def report_data_process(batch_no):
         daily_batch_no = df_daily.iloc[0]['DailyBatchNo'] if not df_daily.empty else None
 
         # Define displayed columns (excluding "State")
-        column_order = ["Category", "SiloNo", "MaterialName", "SetWeight", "ActualWeight", "Difference", "Tolerance"]
+        column_order = ["Category", "SiloNo", "MaterialName", "SetWeight", "ActualWeight", "Difference", "Tolerance", "CoarseSpeed", "FineSpeed"]
         df_pivot = df_pivot[column_order]  # Only include these columns in the table
         df_pivot["SiloNo"] = df_pivot["SiloNo"].astype(int)
         

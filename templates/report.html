@@ -92,6 +92,20 @@ document.addEventListener("DOMContentLoaded", () => {
   const popupBody  = document.querySelector("#popupTable tbody");
   const closePopup = document.getElementById("closePopup");
 
+  /* ================= COLUMN VISIBILITY SETTING ================= */
+  let showSpeedColumns = true; // default until loaded from server
+
+  async function loadColumnSetting() {
+    try {
+      const res = await fetch("/api/settings/get_column_settings");
+      const result = await res.json();
+      showSpeedColumns = !!result.show_cspeed_fspeed;
+    } catch (err) {
+      console.error("Column setting fetch failed:", err);
+      showSpeedColumns = true;
+    }
+  }
+
   /* ================= DATE LIMIT ================= */
   const now = new Date().toISOString().slice(0,16);
   fromDate.max = toDate.max = now;
@@ -166,18 +180,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
     viewBtn.click();
   }
-  restoreSession();
 
-  /* ===== INITIAL DEFAULT LOAD (REPORT) ===== */
-  if (!localStorage.getItem("report_filters")) {
-    hourSelect.value = "Custom";
-    fromDate.value = "2025-05-01T00:00";
-    toDate.value = "2025-06-30T23:59";
+  /* ===== STARTUP SEQUENCE ===== */
+  (async () => {
+    await loadColumnSetting();   // load setting BEFORE anything else runs
+    await restoreSession();
 
-    setTimeout(() => viewBtn.click(), 200);
-  }
+    /* ===== INITIAL DEFAULT LOAD (REPORT) ===== */
+    if (!localStorage.getItem("report_filters")) {
+      hourSelect.value = "Custom";
+      fromDate.value = "2025-05-01T00:00";
+      toDate.value = "2025-06-30T23:59";
 
-
+      setTimeout(() => viewBtn.click(), 200);
+    }
+  })();
 
   /* ================= VIEW ================= */
   viewBtn.onclick = async () => {
@@ -247,6 +264,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   /* ================= POPUP ================= */
   window.openPopup = async (batchNo) => {
+    await loadColumnSetting();   // re-check setting every time popup opens
+
     popup.style.display = "flex";
     popupTitle.textContent = `PLC Data for BatchNo: ${batchNo}`;
 
@@ -265,14 +284,20 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const cols = [
+    let cols = [
       { k:"Category", l:"Category" },
       { k:"MaterialName", l:"Material Name" },
       { k:"SetWeight", l:"Set Weight (Kg)" },
       { k:"ActualWeight", l:"Actual Weight (Kg)" },
       { k:"Difference", l:"Difference (Kg)" },
-      { k:"Tolerance", l:"Tolerance (Kg)" }
+      { k:"Tolerance", l:"Tolerance (Kg)" },
+      { k:"CoarseSpeed", l:"Coarse Speed (%)" },
+      { k:"FineSpeed", l:"Fine Speed (%)" }
     ];
+
+    if (!showSpeedColumns) {
+      cols = cols.filter(c => c.k !== "CoarseSpeed" && c.k !== "FineSpeed");
+    }
 
     popupHead.innerHTML = `<tr>${cols.map(c => `<th>${c.l}</th>`).join("")}</tr>`;
     popupBody.innerHTML = data.map(r =>

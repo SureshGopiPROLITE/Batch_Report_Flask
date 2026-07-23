@@ -9,7 +9,7 @@
       <button class="icon-button" id="exportBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %} title="Export"><i class="bx bx-export"></i></button>
     </div>
   </div>
-
+   
   <div class="inv-navbar-right recipe">
     <div class="table-opt">
       <button class="add-btn" id="addRowRecipe" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Add</button>
@@ -61,7 +61,6 @@
 
     </div>
 
-
     <div class="tree-view">
       <ul class="tree-root">
         <li class="folder-node expanded">
@@ -82,7 +81,6 @@
 
 </div>
 
-
 <script>
 document.getElementById("nextMixer").addEventListener("click", () => {
     const mixer = document.getElementById("mixerNo");
@@ -92,165 +90,485 @@ document.getElementById("nextMixer").addEventListener("click", () => {
 
 <script>
 document.addEventListener("DOMContentLoaded", () => {
-
   const childList = document.getElementById("childRecipes");
-
   const selectedLabel = document.getElementById("selectedRecipeLabel");
-
   const selectedMixerLabel = document.getElementById("selectedMixerLabel");
   const tableContainer = document.getElementById("recipeTableContainer");
   const searchInput = document.getElementById("searchRecipe");
-
   const addRecipeIcon = document.getElementById("addRecipeIcon");
   const deleteRecipeBtn = document.getElementById("deleteRecipe");
   const exportBtn = document.getElementById("exportBtn");
   const importBtn = document.getElementById("importBtn");
   const recipedownload = document.getElementById("recipedownload")
-  /* ---------------- LOAD RECIPES ---------------- */
-  async function loadRecipes() {
-    const res = await fetch("/api/recipes_data/get_recipes");
-    const data = await res.json();
-    renderTree(data);
-  }
-  /* =====================================================
+
+/* =====================================================
+   RECIPE COLUMN VISIBILITY
+   Driven by Settings page
+===================================================== */
+let showSpeedColumns = true;
+/* ---------------- LOAD COLUMN SETTING ---------------- */
+async function loadColumnSetting() {
+
+    try {
+        const res = await fetch("/api/settings/get_column_settings");
+        if (!res.ok) {
+            throw new Error(`HTTP Error: ${res.status}`);
+        }
+
+        const result = await res.json();
+
+        console.log("Column Settings Response:", result);
+
+        /*
+         * Get saved value from Settings page
+         *
+         * true  = Show CoarseSpeed / FineSpeed
+         * false = Hide CoarseSpeed / FineSpeed
+         */
+        showSpeedColumns = Boolean(result.show_cspeed_fspeed);
+
+        console.log(
+            "Show CoarseSpeed / FineSpeed:",
+            showSpeedColumns
+        );
+
+    } catch (err) {
+
+        console.error(
+            "Column setting fetch failed:",
+            err
+        );
+
+        /*
+         * Default behavior if API fails
+         */
+        showSpeedColumns = true;
+    }
+}
+
+
+/* ---------------- CHECK COLUMN VISIBILITY ---------------- */
+function shouldShowCSpeedFSpeed() {
+    return showSpeedColumns;
+}
+
+
+/* ---------------- APPLY COLUMN VISIBILITY ---------------- */
+function applyColumnVisibility(table) {
+
+    const show = shouldShowCSpeedFSpeed();
+
+    console.log(
+        "Applying Speed Column Visibility:",
+        show ? "SHOW" : "HIDE"
+    );
+
+    /*
+     * Hide or show both:
+     * CoarseSpeed
+     * FineSpeed
+     */
+    table
+        .querySelectorAll(".col-cspeed, .col-fspeed")
+        .forEach(el => {
+
+            el.style.display = show
+                ? ""
+                : "none";
+
+        });
+}
+
+
+/* ---------------- LOAD RECIPES ---------------- */
+async function loadRecipes() {
+
+    try {
+
+        const res =
+            await fetch("/api/recipes_data/get_recipes");
+
+        if (!res.ok) {
+            throw new Error(`HTTP Error: ${res.status}`);
+        }
+
+        const data = await res.json();
+
+        renderTree(data);
+
+    } catch (err) {
+
+        console.error(
+            "Recipe loading failed:",
+            err
+        );
+
+    }
+}
+
+/* =====================================================
    UNIVERSAL SORTING LOGIC (ASC + DESC)
 ===================================================== */
-  let recipeSortState = {};
+let recipeSortState = {};
 
-  function enableRecipeSorting(table) {
-      const head = table.querySelector("thead");
-      const body = table.querySelector("tbody");
+function enableRecipeSorting(table) {
 
-      if (!head || !body) return;
+    const head = table.querySelector("thead");
 
-      const headers = head.querySelectorAll("th");
+    const body = table.querySelector("tbody");
 
-      headers.forEach((th, colIndex) => {
-          th.style.cursor = "pointer";
+    if (!head || !body) return;
 
-          th.addEventListener("click", () => sortRecipeTable(body, colIndex));
-      });
-  }
+    const headers =
+        head.querySelectorAll("th");
 
-  function sortRecipeTable(body, colIndex) {
+    headers.forEach((th, colIndex) => {
 
-      let rows = Array.from(body.querySelectorAll("tr"));
-      recipeSortState[colIndex] = recipeSortState[colIndex] === "asc" ? "desc" : "asc";
+        th.style.cursor = "pointer";
 
-      rows.sort((a, b) => {
-          let aVal = a.children[colIndex]?.innerText.trim() || "";
-          let bVal = b.children[colIndex]?.innerText.trim() || "";
+        th.addEventListener("click", () => {
 
-          // Auto numeric detection
-          const isNumeric = !isNaN(parseFloat(aVal)) && !isNaN(parseFloat(bVal));
+            sortRecipeTable(
+                body,
+                colIndex
+            );
 
-          if (isNumeric) {
-              aVal = parseFloat(aVal) || 0;
-              bVal = parseFloat(bVal) || 0;
-          }
+        });
 
-          if (recipeSortState[colIndex] === "asc") {
-              return aVal > bVal ? 1 : -1;
-          } else {
-              return aVal < bVal ? 1 : -1;
-          }
-      });
+    });
 
-      // Re-render table
-      body.innerHTML = "";
-      rows.forEach(r => body.appendChild(r));
-  }
+}
 
-  function renderTree(data) {
+
+function sortRecipeTable(body, colIndex) {
+
+    let rows =
+        Array.from(
+            body.querySelectorAll("tr")
+        );
+
+    recipeSortState[colIndex] =
+        recipeSortState[colIndex] === "asc"
+            ? "desc"
+            : "asc";
+
+
+    rows.sort((a, b) => {
+
+        let aVal =
+            a.children[colIndex]
+                ?.innerText
+                .trim() || "";
+
+        let bVal =
+            b.children[colIndex]
+                ?.innerText
+                .trim() || "";
+
+
+        // Auto numeric detection
+        const isNumeric =
+            !isNaN(parseFloat(aVal)) &&
+            !isNaN(parseFloat(bVal));
+
+
+        if (isNumeric) {
+
+            aVal =
+                parseFloat(aVal) || 0;
+
+            bVal =
+                parseFloat(bVal) || 0;
+
+        }
+
+
+        if (
+            recipeSortState[colIndex] ===
+            "asc"
+        ) {
+
+            return aVal > bVal
+                ? 1
+                : -1;
+
+        } else {
+
+            return aVal < bVal
+                ? 1
+                : -1;
+
+        }
+
+    });
+
+
+    // Re-render sorted rows
+    body.innerHTML = "";
+
+    rows.forEach(row => {
+
+        body.appendChild(row);
+
+    });
+
+}
+
+
+/* ---------------- RENDER RECIPE TREE ---------------- */
+function renderTree(data) {
+
     childList.innerHTML = "";
 
     if (!data.length) {
-      childList.innerHTML = `<li class="no-data">No recipes found</li>`;
-      return;
+
+        childList.innerHTML =
+            `<li class="no-data">
+                No recipes found
+             </li>`;
+
+        return;
     }
+
 
     data.forEach(r => {
-      const li = document.createElement("li");
-      li.className = "file-node";
-      li.dataset.id = r.id;
-      li.dataset.name = r.name;
 
-      li.innerHTML = `<i class='bx bx-file'></i><span>${r.name}</span>`;
+        const li =
+            document.createElement("li");
 
-      li.addEventListener("click", () => selectRecipe(r));
-      li.addEventListener("dblclick", () => renameRecipe(r));
+        li.className =
+            "file-node";
 
-      childList.appendChild(li);
+        li.dataset.id =
+            r.id;
+
+        li.dataset.name =
+            r.name;
+
+
+        li.innerHTML =
+            `<i class='bx bx-file'></i>
+             <span>${r.name}</span>`;
+
+
+        li.addEventListener(
+            "click",
+            () => selectRecipe(r)
+        );
+
+
+        li.addEventListener(
+            "dblclick",
+            () => renameRecipe(r)
+        );
+
+
+        childList.appendChild(li);
+
     });
-  }
 
-  /* ---------------- SELECT RECIPE ---------------- */
-  async function selectRecipe(recipe) {
-    document.querySelectorAll(".file-node").forEach(x => x.classList.remove("active"));
-    const node = document.querySelector(`.file-node[data-id='${recipe.id}']`);
-    if (node) node.classList.add("active");
+}
 
-    selectedLabel.textContent = recipe.name;
 
-    const res = await fetch(`/api/recipes/${encodeURIComponent(recipe.name)}/table`);
-    const rows = await res.json();
+/* ---------------- SELECT RECIPE ---------------- */
+async function selectRecipe(recipe) {
 
-    if (!rows.length) {
-      tableContainer.innerHTML =
-        `<p class="placeholder">No data found for <b>${recipe.name}</b>.</p>`;
-      return;
+    document
+        .querySelectorAll(".file-node")
+        .forEach(x =>
+            x.classList.remove("active")
+        );
+
+
+    const node =
+        document.querySelector(
+            `.file-node[data-id='${recipe.id}']`
+        );
+
+
+    if (node) {
+
+        node.classList.add("active");
+
     }
 
+
+    selectedLabel.textContent =
+        recipe.name;
+
+
+    const res =
+        await fetch(
+            `/api/recipes/${encodeURIComponent(recipe.name)}/table`
+        );
+
+
+    const rows =
+        await res.json();
+
+
+    if (!rows.length) {
+
+        tableContainer.innerHTML =
+            `<p class="placeholder">
+                No data found for
+                <b>${recipe.name}</b>.
+             </p>`;
+
+        return;
+
+    }
+
+
     tableContainer.innerHTML = "";
-    tableContainer.appendChild(buildTable(recipe.name, rows));
-  }
 
-  /* ---------------- BUILD TABLE ---------------- */
-  function buildTable(category, rows) {
 
-      const wrapper = document.createElement("div");
+    tableContainer.appendChild(
+        buildTable(
+            recipe.name,
+            rows
+        )
+    );
 
-      const table = document.createElement("table");
-      table.className = "data-table";
+}
 
-      table.innerHTML = `
+
+/* ---------------- BUILD TABLE ---------------- */
+function buildTable(category, rows) {
+
+    const wrapper = document.createElement("div");
+    const table = document.createElement("table");
+    table.className = "data-table";
+
+    table.innerHTML = `
         <thead>
-          <tr>
-            <th style="display:none;">Index</th>
-            <th>Silo No</th>
-            <th>Material Name</th>
-            <th>Set Weight(Kg)</th>
-            <th>Fine Weight(Kg)</th>
-            <th>Tolerance(kg)</th>
-            <th>Action</th>
-          </tr>
+            <tr>
+                <th style="display:none;">Index</th>
+                <th>Silo No</th>
+                <th>Material Name</th>
+                <th>Set Weight(Kg)</th>
+                <th>Fine Weight(Kg)</th>
+
+                <th>
+                    Tolerance(kg)
+                </th>
+
+                <th class="col-cspeed">
+                    Coarse Speed(%)
+                </th>
+
+                <th class="col-fspeed">
+                    Fine Speed(%)
+                </th>
+
+                <th>
+                    Action
+                </th>
+
+            </tr>
+
         </thead>
 
+
         <tbody id="recipeTableBody">
-          ${rows.map(r => `
-            <tr data-index="${r.Index}" data-category="${category}">
-              <td style="display:none;">${r.Index}</td>
-              <td>${r.SiloNo}</td>
-              <td>${r.MaterialName}</td>
-              <td>${r.SetWeight}</td>
-              <td>${r.FineWeight}</td>
-              <td>${r.Tolerance}</td>
-              <td class="action-cell">
-                <button class="table-action-btn edit-btn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}><i class="bx bx-edit"></i></button>
-                <button class="table-action-btn delete-btn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}><i class="bx bx-trash"></i></button>
-              </td>
-            </tr>
-          `).join("")}
+
+            ${rows.map(r => `
+
+                <tr
+                    data-index="${r.Index}"
+                    data-category="${category}"
+                >
+
+                    <td style="display:none;">
+                        ${r.Index}
+                    </td>
+
+                    <td>
+                        ${r.SiloNo}
+                    </td>
+
+                    <td>
+                        ${r.MaterialName}
+                    </td>
+
+                    <td>
+                        ${r.SetWeight}
+                    </td>
+
+                    <td>
+                        ${r.FineWeight}
+                    </td>
+
+                    <td>
+                        ${r.Tolerance}
+                    </td>
+
+                    <td class="col-cspeed">
+                        ${r.CoarseSpeed}
+                    </td>
+
+                    <td class="col-fspeed">
+                        ${r.FineSpeed}
+                    </td>
+
+                    <td class="action-cell">
+
+                        <button
+                            class="table-action-btn edit-btn"
+                            {% if not user_logged_in or role == 'operator' %}
+                                disabled
+                                title="Access Denied"
+                            {% endif %}
+                        >
+                            <i class="bx bx-edit"></i>
+                        </button>
+
+
+                        <button
+                            class="table-action-btn delete-btn"
+                            {% if not user_logged_in or role == 'operator' %}
+                                disabled
+                                title="Access Denied"
+                            {% endif %}
+                        >
+                            <i class="bx bx-trash"></i>
+                        </button>
+
+                    </td>
+
+                </tr>
+
+            `).join("")}
+
         </tbody>
-      `;
 
-      wrapper.appendChild(table);
+    `;
 
-      /* 🔥 Enable Sorting for this recipe table */
-      setTimeout(() => enableRecipeSorting(table), 10);
 
-      return wrapper;
-  }
+    wrapper.appendChild(table);
+
+
+    /* =====================================================
+       ENABLE SORTING
+    ===================================================== */
+
+    setTimeout(() => {
+
+        enableRecipeSorting(table);
+
+    }, 10);
+
+
+    /* =====================================================
+       APPLY SAVED COLUMN VISIBILITY
+    ===================================================== */
+
+    applyColumnVisibility(table);
+
+
+    return wrapper;
+
+}
 
   /* ---------------- ADD ROW ---------------- */
   document.getElementById("addRowRecipe").addEventListener("click", () => {
@@ -270,6 +588,8 @@ document.addEventListener("DOMContentLoaded", () => {
       <td><input class="edit-input set"></td>
       <td><input class="edit-input fine"></td>
       <td><input class="edit-input tol"></td>
+      <td class="col-cspeed"><input class="edit-input cspeed"></td>
+      <td class="col-fspeed"><input class="edit-input fspeed"></td>
       <td class="action-cell">
         <button class="table-action-btn save-new"><i class="bx bx-check"></i></button>
         <button class="table-action-btn cancel-new"><i class="bx bx-x"></i></button>
@@ -277,6 +597,11 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
 
     tbody.prepend(tr);
+
+    // Keep the new row's Coarse/Fine Speed cells in sync with the setting
+    if (!shouldShowCSpeedFSpeed()) {
+      tr.querySelectorAll(".col-cspeed, .col-fspeed").forEach(el => el.style.display = "none");
+    }
 
     const silo = tr.querySelector(".silo");
     const material = tr.querySelector(".material");
@@ -296,7 +621,9 @@ document.addEventListener("DOMContentLoaded", () => {
       const set = Number(tr.querySelector(".set").value);
       const fine = Number(tr.querySelector(".fine").value);
       const tol = Number(tr.querySelector(".tol").value);
-
+      // New Cols
+      const cspeed = Number(tr.querySelector(".cspeed").value);
+      const fspeed = Number(tr.querySelector(".fspeed").value);
       // ✅ Validation for FineWeight & Tolerance
       if (fine > set) return alert("❌ Fine Weight must be ≤ Set Weight!");
       if (tol > set) return alert("❌ Tolerance must be ≤ Set Weight!");
@@ -311,7 +638,10 @@ document.addEventListener("DOMContentLoaded", () => {
         SetWeight: set,
         FineWeight: fine,
         Tolerance: tol,
-        Category: category
+        Category: category,
+        // New Cols
+        CoarseSpeed: cspeed,
+        FineSpeed: fspeed
       };
 
       const res = await fetch("/api/recipes_data/add_row", {
@@ -338,274 +668,877 @@ document.addEventListener("DOMContentLoaded", () => {
 
   }); // ✅ FIXED CLOSING BRACE
 
-  /* ---------------- EDIT ROW ---------------- */
-  document.addEventListener("click", async (e) => {
+/* ---------------- EDIT ROW ---------------- */
+document.addEventListener("click", async (e) => {
 
+    /* ---------------- EDIT ROW ---------------- */
     if (e.target.closest(".edit-btn")) {
 
-      const row = e.target.closest("tr");
-      if (row.classList.contains("editing")) return;
+        const row = e.target.closest("tr");
 
-      row.classList.add("editing");
+        if (row.classList.contains("editing")) return;
 
-      const tds = row.querySelectorAll("td");
-      const silo = tds[1].innerText.trim();
-      const mat = tds[2].innerText.trim();
+        row.classList.add("editing");
 
-      tds[1].innerHTML = `<input class="edit-input edit-silo" value="${silo}">`;
-      tds[2].innerHTML = `<input class="edit-input edit-material" value="${mat}" disabled>`;
-      tds[3].innerHTML = `<input class="edit-input edit-set" value="${tds[3].innerText}">`;
-      tds[4].innerHTML = `<input class="edit-input edit-fine" value="${tds[4].innerText}">`;
-      tds[5].innerHTML = `<input class="edit-input edit-tol" value="${tds[5].innerText}">`;
+        const tds = row.querySelectorAll("td");
 
-      tds[6].innerHTML = `
-        <button class="table-action-btn save-edit"><i class="bx bx-check"></i></button>
-        <button class="table-action-btn cancel-edit"><i class="bx bx-x"></i></button>
-      `;
+        const silo = tds[1].innerText.trim();
+        const mat = tds[2].innerText.trim();
 
-      const siloInput = tds[1].querySelector(".edit-silo");
-      const matInput = tds[2].querySelector(".edit-material");
+        tds[1].innerHTML =
+            `<input class="edit-input edit-silo" value="${silo}">`;
 
-      siloInput.addEventListener("blur", async () => {
-        if (!siloInput.value) return matInput.value = "";
-        const d = await (await fetch(`/api/material/${siloInput.value}`)).json();
-        matInput.value = d.success ? d.MaterialName : "";
-      });
+        tds[2].innerHTML =
+            `<input class="edit-input edit-material" value="${mat}" disabled>`;
 
-      tds[6].querySelector(".cancel-edit").onclick = () =>
-        selectRecipe({ id: row.dataset.index, name: row.dataset.category });
+        tds[3].innerHTML =
+            `<input class="edit-input edit-set" value="${tds[3].innerText}">`;
 
-      tds[6].querySelector(".save-edit").onclick = async () => {
+        tds[4].innerHTML =
+            `<input class="edit-input edit-fine" value="${tds[4].innerText}">`;
 
-        const set = Number(tds[3].querySelector(".edit-set").value);
-        const fine = Number(tds[4].querySelector(".edit-fine").value);
-        const tol = Number(tds[5].querySelector(".edit-tol").value);
+        tds[5].innerHTML =
+            `<input class="edit-input edit-tol" value="${tds[5].innerText}">`;
 
-        // ✅ Validation for FineWeight & Tolerance
-        if (fine > set) return alert("❌ Fine Weight must be ≤ Set Weight!");
-        if (tol > set) return alert("❌ Tolerance must be ≤ Set Weight!");
+        /*
+         * Coarse Speed and Fine Speed
+         *
+         * These columns may be hidden by Settings,
+         * but the table cells still exist in the DOM.
+         */
+        tds[6].innerHTML =
+            `<input class="edit-input edit-cspeed" value="${tds[6].innerText}">`;
 
-        const siloInput = tds[1].querySelector(".edit-silo");
+        tds[7].innerHTML =
+            `<input class="edit-input edit-fspeed" value="${tds[7].innerText}">`;
 
-        const matRes = await fetch(`/api/material/${siloInput.value}`);
-        const matJson = await matRes.json();
+        tds[8].innerHTML = `
+            <button class="table-action-btn save-edit">
+                <i class="bx bx-check"></i>
+            </button>
 
-        if (!matJson.success) return alert("❌ Invalid Silo Number!");
+            <button class="table-action-btn cancel-edit">
+                <i class="bx bx-x"></i>
+            </button>
+        `;
 
-        const payload = {
-          SiloNo: siloInput.value.trim(),
-          Category: row.dataset.category,
-          SetWeight: set,
-          FineWeight: fine,
-          Tolerance: tol
-        };
 
-        const res = await fetch(`/api/recipes_data/update_row/${row.dataset.index}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+        /* ---------------- MATERIAL UPDATE ---------------- */
+
+        const siloInput =
+            tds[1].querySelector(".edit-silo");
+
+        const matInput =
+            tds[2].querySelector(".edit-material");
+
+
+        siloInput.addEventListener("blur", async () => {
+
+            if (!siloInput.value) {
+                matInput.value = "";
+                return;
+            }
+
+            const d =
+                await (
+                    await fetch(
+                        `/api/material/${siloInput.value}`
+                    )
+                ).json();
+
+            matInput.value =
+                d.success
+                    ? d.MaterialName
+                    : "";
+
         });
 
-        const json = await res.json();
 
-        if (!json.success) {
+        /* ---------------- CANCEL EDIT ---------------- */
 
-          if (json.error === "silo_already_exists")
-            return alert("❌ This SiloNo already exists in this recipe!");
+        tds[8]
+            .querySelector(".cancel-edit")
+            .onclick = () => {
 
-          if (json.error === "silo_not_found")
-            return alert("❌ Silo not found in MaterialData!");
+                selectRecipe({
+                    id: row.dataset.index,
+                    name: row.dataset.category
+                });
 
-          return alert("❌ Update error: " + json.error);
-        }
+            };
 
-        selectRecipe({ id: row.dataset.index, name: row.dataset.category });
-      };
+
+        /* ---------------- SAVE EDIT ---------------- */
+
+        tds[8]
+            .querySelector(".save-edit")
+            .onclick = async () => {
+
+                const set =
+                    Number(
+                        tds[3]
+                            .querySelector(".edit-set")
+                            .value
+                    );
+
+                const fine =
+                    Number(
+                        tds[4]
+                            .querySelector(".edit-fine")
+                            .value
+                    );
+
+                const tol =
+                    Number(
+                        tds[5]
+                            .querySelector(".edit-tol")
+                            .value
+                    );
+
+                const cspeed =
+                    Number(
+                        tds[6]
+                            .querySelector(".edit-cspeed")
+                            .value
+                    );
+
+                const fspeed =
+                    Number(
+                        tds[7]
+                            .querySelector(".edit-fspeed")
+                            .value
+                    );
+
+
+                /* ---------------- VALIDATION ---------------- */
+
+                if (fine > set) {
+
+                    return alert(
+                        "❌ Fine Weight must be ≤ Set Weight!"
+                    );
+
+                }
+
+                if (tol > set) {
+
+                    return alert(
+                        "❌ Tolerance must be ≤ Set Weight!"
+                    );
+
+                }
+
+
+                const siloInput =
+                    tds[1]
+                        .querySelector(".edit-silo");
+
+
+                /* ---------------- CHECK SILO ---------------- */
+
+                const matRes =
+                    await fetch(
+                        `/api/material/${siloInput.value}`
+                    );
+
+                const matJson =
+                    await matRes.json();
+
+
+                if (!matJson.success) {
+
+                    return alert(
+                        "❌ Invalid Silo Number!"
+                    );
+
+                }
+
+
+                /* ---------------- UPDATE PAYLOAD ---------------- */
+
+                const payload = {
+
+                    SiloNo:
+                        siloInput.value.trim(),
+
+                    Category:
+                        row.dataset.category,
+
+                    SetWeight:
+                        set,
+
+                    FineWeight:
+                        fine,
+
+                    Tolerance:
+                        tol,
+
+                    CoarseSpeed:
+                        cspeed,
+
+                    FineSpeed:
+                        fspeed
+
+                };
+
+
+                /* ---------------- UPDATE DATABASE ---------------- */
+
+                const res =
+                    await fetch(
+                        `/api/recipes_data/update_row/${row.dataset.index}`,
+                        {
+                            method: "PUT",
+
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            },
+
+                            body:
+                                JSON.stringify(payload)
+                        }
+                    );
+
+
+                const json =
+                    await res.json();
+
+
+                /* ---------------- UPDATE RESULT ---------------- */
+
+                if (!json.success) {
+
+                    if (
+                        json.error ===
+                        "silo_already_exists"
+                    ) {
+
+                        return alert(
+                            "❌ This SiloNo already exists in this recipe!"
+                        );
+
+                    }
+
+
+                    if (
+                        json.error ===
+                        "silo_not_found"
+                    ) {
+
+                        return alert(
+                            "❌ Silo not found in MaterialData!"
+                        );
+
+                    }
+
+
+                    return alert(
+                        "❌ Update error: " +
+                        json.error
+                    );
+
+                }
+
+
+                /* ---------------- REFRESH TABLE ---------------- */
+
+                selectRecipe({
+
+                    id:
+                        row.dataset.index,
+
+                    name:
+                        row.dataset.category
+
+                });
+
+            };
 
     }
+
 
     /* ---------------- DELETE ROW ---------------- */
+
     if (e.target.closest(".delete-btn")) {
 
-      const row = e.target.closest("tr");
+        const row =
+            e.target.closest("tr");
 
-      if (!confirm("Delete this row?")) return;
 
-      const res = await fetch(`/api/recipes_data/delete_row/${row.dataset.index}`, {
-        method: "DELETE"
-      });
-
-      const json = await res.json();
-
-      if (json.success) row.remove();
-      else alert("❌ Delete failed.");
-    }
-
-  });
-
-  /* ---------------- RENAME RECIPE ---------------- */
-  async function renameRecipe(recipe) {
-    const newName = prompt("Rename recipe:", recipe.name);
-    if (!newName || newName.trim() === recipe.name) return;
-
-    const res = await fetch("/api/recipes_data/rename_recipe", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ old_name: recipe.name, new_name: newName.trim() })
-    });
-
-    if ((await res.json()).success) {
-      await loadRecipes();
-      setTimeout(() =>
-        selectRecipe({ id: recipe.id, name: newName.trim() }), 150);
-    }
-  }
-
-  /* ---------------- ADD RECIPE ---------------- */
-  async function addRecipe() {
-    const name = prompt("Enter new recipe name:");
-    if (!name) return;
-
-    await fetch("/api/recipes_data/add_recipe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name })
-    });
-
-    loadRecipes();
-  }
-  
-  importBtn.addEventListener("click", () => {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = ".xlsx";
-
-      input.onchange = () => {
-          const file = input.files[0];
-          if (!file) return;
-
-          const formData = new FormData();
-          formData.append("file", file);
-
-          fetch("/api/recipes/import", {
-              method: "POST",
-              body: formData
-          })
-          .then(res => res.json())
-          .then(json => {
-              if (json.success) {
-                  alert("✅ Imported successfully!");
-                  loadRecipes();   // refresh tree
-              } else {
-                  alert("❌ Import failed: " + json.error);
-              }
-          })
-          .catch(err => alert("❌ Error: " + err));
-      };
-
-      input.click();
-  });
-  
-  exportBtn.addEventListener("click", async () => {
-      const category = document.getElementById("selectedRecipeLabel").textContent.trim();
-
-      if (category === "--") {
-          return alert("Please select a recipe to export.");
-      }
-
-      const res = await fetch("/api/recipes/export", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ category })
-      });
-
-      if (!res.ok) {
-          const error = await res.json();
-          return alert(error.error || "Export failed");
-      }
-
-      // Download Excel
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${category}.xlsx`;
-      a.click();
-
-      window.URL.revokeObjectURL(url);
-  });
-  /* ---------------- DELETE RECIPE ---------------- */
-  async function deleteSelectedRecipe() {
-    const active = document.querySelector(".file-node.active");
-    if (!active) return alert("Select a recipe first.");
-
-    const name = active.dataset.name;
-
-    if (!confirm(`Delete "${name}"?`)) return;
-
-    await fetch(`/api/recipes_data/delete_recipe/${encodeURIComponent(name)}`, {
-      method: "DELETE"
-    });
-
-    loadRecipes();
-    selectedLabel.textContent = "--";
-    tableContainer.innerHTML = `<p class="placeholder">Recipe deleted.</p>`;
-  }
-
-  searchInput.addEventListener("input", () => {
-    const q = searchInput.value.toLowerCase();
-    document.querySelectorAll(".file-node").forEach(n => {
-      n.style.display = n.dataset.name.toLowerCase().includes(q) ? "" : "none";
-    });
-  });
-
-  addRecipeIcon.addEventListener("click", addRecipe);
-  deleteRecipeBtn.addEventListener("click", deleteSelectedRecipe);
-
-  loadRecipes();
-});
-
-/* --------------- DOWNLOAD  RECIPE ---------------- */
-
-const recipedownload = document.getElementById("recipedownload");
-
-recipedownload.addEventListener("click", async () => {
-    try {
-
-        const mixerno = document.getElementById("mixerNo").value;
-        const recipe_name = document.getElementById("selectedRecipeLabel").textContent.trim();
-
-        if (recipe_name === "--" || !recipe_name) {
-            alert("Please select a recipe.");
+        if (!confirm("Delete this row?")) {
             return;
         }
 
-        const response = await fetch("/download_recipe", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                mixerno,
-                recipe_name
-            })
-        });
 
-        const data = await response.json();
+        const res =
+            await fetch(
+                `/api/recipes_data/delete_row/${row.dataset.index}`,
+                {
+                    method: "DELETE"
+                }
+            );
 
-        // Check Flask success flag
-        if (!data.success) {
-            throw new Error(data.message || "Recipe download failed");
+
+        const json =
+            await res.json();
+
+
+        if (json.success) {
+
+            row.remove();
+
+        } else {
+
+            alert(
+                "❌ Delete failed."
+            );
+
         }
 
-        alert(data.message);
-
-    } catch (error) {
-        console.error("Error:", error);
-        alert(error.message);   // Show actual backend error
     }
+
 });
+
+
+/* ---------------- RENAME RECIPE ---------------- */
+
+async function renameRecipe(recipe) {
+
+    const newName =
+        prompt(
+            "Rename recipe:",
+            recipe.name
+        );
+
+
+    if (
+        !newName ||
+        newName.trim() === recipe.name
+    ) {
+        return;
+    }
+
+
+    const res =
+        await fetch(
+            "/api/recipes_data/rename_recipe",
+            {
+                method: "PUT",
+
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify({
+                        old_name:
+                            recipe.name,
+
+                        new_name:
+                            newName.trim()
+                    })
+            }
+        );
+
+
+    const result =
+        await res.json();
+
+
+    if (result.success) {
+
+        await loadRecipes();
+
+
+        setTimeout(
+            () => {
+
+                selectRecipe({
+
+                    id:
+                        recipe.id,
+
+                    name:
+                        newName.trim()
+
+                });
+
+            },
+            150
+        );
+
+    }
+
+}
+
+
+/* ---------------- ADD RECIPE ---------------- */
+
+async function addRecipe() {
+
+    const name =
+        prompt(
+            "Enter new recipe name:"
+        );
+
+
+    if (!name) {
+        return;
+    }
+
+
+    await fetch(
+        "/api/recipes_data/add_recipe",
+        {
+            method: "POST",
+
+            headers: {
+                "Content-Type":
+                    "application/json"
+            },
+
+            body:
+                JSON.stringify({
+                    name
+                })
+        }
+    );
+
+
+    loadRecipes();
+
+}
+
+
+/* ---------------- IMPORT RECIPE ---------------- */
+
+importBtn.addEventListener(
+    "click",
+    () => {
+
+        const input =
+            document.createElement("input");
+
+        input.type =
+            "file";
+
+        input.accept =
+            ".xlsx";
+
+
+        input.onchange = () => {
+
+            const file =
+                input.files[0];
+
+
+            if (!file) {
+                return;
+            }
+
+
+            const formData =
+                new FormData();
+
+
+            formData.append(
+                "file",
+                file
+            );
+
+
+            fetch(
+                "/api/recipes/import",
+                {
+                    method: "POST",
+
+                    body:
+                        formData
+                }
+            )
+
+            .then(
+                res =>
+                    res.json()
+            )
+
+            .then(
+                json => {
+
+                    if (json.success) {
+
+                        alert(
+                            "✅ Imported successfully!"
+                        );
+
+
+                        loadRecipes();
+
+                    } else {
+
+                        alert(
+                            "❌ Import failed: " +
+                            json.error
+                        );
+
+                    }
+
+                }
+            )
+
+            .catch(
+                err => {
+
+                    alert(
+                        "❌ Error: " +
+                        err
+                    );
+
+                }
+            );
+
+        };
+
+
+        input.click();
+
+    }
+);
+
+
+/* ---------------- EXPORT RECIPE ---------------- */
+
+exportBtn.addEventListener(
+    "click",
+    async () => {
+
+        const category =
+            document
+                .getElementById(
+                    "selectedRecipeLabel"
+                )
+                .textContent
+                .trim();
+
+
+        if (category === "--") {
+
+            return alert(
+                "Please select a recipe to export."
+            );
+
+        }
+
+
+        const res =
+            await fetch(
+                "/api/recipes/export",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body:
+                        JSON.stringify({
+                            category
+                        })
+                }
+            );
+
+
+        if (!res.ok) {
+
+            const error =
+                await res.json();
+
+
+            return alert(
+                error.error ||
+                "Export failed"
+            );
+
+        }
+
+
+        /* ---------------- DOWNLOAD EXCEL ---------------- */
+
+        const blob =
+            await res.blob();
+
+
+        const url =
+            window.URL.createObjectURL(
+                blob
+            );
+
+
+        const a =
+            document.createElement("a");
+
+
+        a.href =
+            url;
+
+
+        a.download =
+            `${category}.xlsx`;
+
+
+        a.click();
+
+
+        window.URL.revokeObjectURL(
+            url
+        );
+
+    }
+);
+
+
+/* ---------------- DELETE RECIPE ---------------- */
+
+async function deleteSelectedRecipe() {
+
+    const active =
+        document.querySelector(
+            ".file-node.active"
+        );
+
+
+    if (!active) {
+
+        return alert(
+            "Select a recipe first."
+        );
+
+    }
+
+
+    const name =
+        active.dataset.name;
+
+
+    if (
+        !confirm(
+            `Delete "${name}"?`
+        )
+    ) {
+
+        return;
+
+    }
+
+
+    await fetch(
+        `/api/recipes_data/delete_recipe/${encodeURIComponent(name)}`,
+        {
+            method: "DELETE"
+        }
+    );
+
+
+    loadRecipes();
+
+
+    selectedLabel.textContent =
+        "--";
+
+
+    tableContainer.innerHTML =
+        `<p class="placeholder">
+            Recipe deleted.
+         </p>`;
+
+}
+
+
+/* ---------------- SEARCH RECIPE ---------------- */
+
+searchInput.addEventListener(
+    "input",
+    () => {
+
+        const q =
+            searchInput.value
+                .toLowerCase();
+
+
+        document
+            .querySelectorAll(
+                ".file-node"
+            )
+            .forEach(n => {
+
+                n.style.display =
+                    n.dataset.name
+                        .toLowerCase()
+                        .includes(q)
+                        ? ""
+                        : "none";
+
+            });
+
+    }
+);
+
+
+/* ---------------- RECIPE BUTTON EVENTS ---------------- */
+
+addRecipeIcon.addEventListener(
+    "click",
+    addRecipe
+);
+
+
+deleteRecipeBtn.addEventListener(
+    "click",
+    deleteSelectedRecipe
+);
+
+
+/* =====================================================
+   IMPORTANT:
+   LOAD COLUMN SETTINGS FIRST
+   THEN LOAD RECIPES
+===================================================== */
+
+loadColumnSetting()
+    .then(() => {
+
+        console.log(
+            "Column settings loaded successfully."
+        );
+
+        loadRecipes();
+
+    })
+    .catch(err => {
+
+        console.error(
+            "Failed to load column settings:",
+            err
+        );
+
+        /*
+         * Even if column settings fail,
+         * recipes should still load.
+         */
+        loadRecipes();
+
+    });
+
+});
+
+
+/* =====================================================
+   DOWNLOAD RECIPE
+===================================================== */
+const recipedownload =
+    document.getElementById(
+        "recipedownload"
+    );
+
+
+recipedownload.addEventListener(
+    "click",
+    async () => {
+
+        try {
+
+            const mixerno =
+                document.getElementById(
+                    "mixerNo"
+                ).value;
+
+
+            const recipe_name =
+                document.getElementById(
+                    "selectedRecipeLabel"
+                )
+                .textContent
+                .trim();
+
+
+            if (
+                recipe_name === "--" ||
+                !recipe_name
+            ) {
+
+                alert(
+                    "Please select a recipe."
+                );
+
+                return;
+
+            }
+
+
+            const response =
+                await fetch(
+                    "/download_recipe",
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body:
+                            JSON.stringify({
+
+                                mixerno,
+
+                                recipe_name
+
+                            })
+
+                    }
+                );
+
+
+            const data =
+                await response.json();
+
+
+            /* ---------------- CHECK SUCCESS ---------------- */
+
+            if (!data.success) {
+
+                throw new Error(
+                    data.message ||
+                    "Recipe download failed"
+                );
+
+            }
+
+
+            alert(
+                data.message
+            );
+
+
+        } catch (error) {
+
+            console.error(
+                "Error:",
+                error
+            );
+
+
+            alert(
+                error.message
+            );
+
+        }
+
+    }
+);
 
 
 </script>

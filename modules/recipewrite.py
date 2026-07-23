@@ -34,7 +34,6 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # ---------------------------------------------------------
             if not recipe_name:
                 return {"success": False,"message": "Recipe name not selected."}
-            
 
             # ---------------------------------------------------------
             # Read Recipe Data
@@ -46,24 +45,23 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
                 return {"success": False,"message": f"No recipe data found for '{recipe_name}'."}
             # --------------------------------------------------------
             # Merge PLC Tags with Recipe Values
-            # ---------------------------------------------------------
+            # --------------------------------------------------------
             dfRecipeTags = (dfTags.astype({"SiloNo": "int"}).merge(dfRecipe.astype({"SiloNo": "int"}),on="SiloNo",how="left"))
             dfRecipeTags["MaterialName"] = (dfRecipeTags["MaterialName"].fillna("."))
-            dfRecipeTags[["SetWeight", "FineWeight", "Tolerance"]] = (dfRecipeTags[["SetWeight", "FineWeight", "Tolerance"]].fillna(0))
+            dfRecipeTags[["SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed"]] = (dfRecipeTags[["SetWeight", "FineWeight", "Tolerance", "CoarseSpeed" ,"FineSpeed"]].fillna(0))
+            
             # Create Value column
             dfRecipeTags["Value"] = (dfRecipeTags.apply(lambda row: row[row["Name"]],axis=1 ))
+            
             # --------------------------------------------------------
             # Header Values
             # --------------------------------------------------------
             dfHeader.loc[dfHeader["Name"] == "PlantName","Value"] = "TEST"
             dfHeader.loc[dfHeader["Name"] == "RecipeName","Value"] = str(recipe_name)
             dfHeader.loc[dfHeader["Name"] == "MixerSelecter", "Value"] = str(mixerno)
-            
             # ---------------------------------------------------------
             # PLC Connection Info
-            #
-            # 
-            #  ---------------------------------------------------------
+            #  --------------------------------------------------------
             dfInfo = pd.read_sql_query('SELECT * FROM "Info_DB";',engineConRead)
             if dfInfo.empty:
                 return {"success": False,"message": "PLC configuration not found."}
@@ -93,7 +91,7 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
                     0 if pd.isna(tagReadReady["bit_offset"])else int(float(tagReadReady["bit_offset"])))
             print("PLC Ready Status :", ready)
             if not ready:
-                msg = " Siemens PLC is Not Ready for Download Recipe"
+                msg = " Siemens PLC is Not Ready for Download Recipe "
                 logging.warning(msg)
                 try:
                     plc.disconnect()
@@ -173,7 +171,7 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             dfRecipeTags = (dfTags.astype({"SiloNo": "int"}).merge(dfRecipe.astype({"SiloNo": "int"}),on="SiloNo",how="left"))
             # Fill Missing Values
             dfRecipeTags["MaterialName"] = (dfRecipeTags["MaterialName"].fillna("."))
-            dfRecipeTags[["SetWeight", "FineWeight", "Tolerance"]] = (dfRecipeTags[["SetWeight", "FineWeight", "Tolerance"]].fillna(0))
+            dfRecipeTags[["SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed"]] = (dfRecipeTags[["SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed"]].fillna(0))
             # Create Value Column
             dfRecipeTags["Value"] = (dfRecipeTags.apply(lambda row: row[row["Name"]],axis=1))
             # Keep Required Columns

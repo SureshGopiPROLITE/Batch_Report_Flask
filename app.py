@@ -14,6 +14,7 @@ import threading
 import plotly
 import subprocess
 import os
+
 import sqlite3
 import tempfile
 from sqlalchemy import text
@@ -24,6 +25,7 @@ from config import sqliteCon
 from modules import monitor, main, Report, analytics_module, graphs, recipewrite, db_management
 from modules.monitor import log_file
 from database import Sqlite
+
 app = Flask(__name__)
 app.secret_key = '4f3d6e9a5f4b1c8d7e6a2b3c9d0e8f1a5b7c2d4e6f9a1b3c8d0e6f2a9b1d3c4'
 
@@ -223,8 +225,8 @@ def add_recipe():
 
         # ✅ Insert an EMPTY row in recipeData
         cursorWrite.execute("""
-            INSERT INTO recipeData (SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, Category)
-            VALUES ('', '', '', '', '', ?)
+            INSERT INTO recipeData (SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, Category, CoarseSpeed, FineSpeed)
+            VALUES ('', '', '', '', '', '', '' ?)
         """, (name,))
         conn.commit()
 
@@ -302,14 +304,14 @@ def get_recipe_table(category):
     query = """
         SELECT r."Index", r.SiloNo,
             COALESCE(m.MaterialName, r.MaterialName) AS MaterialName,
-            r.SetWeight, r.FineWeight, r.Tolerance
+            r.SetWeight, r.FineWeight, r.Tolerance, r.CoarseSpeed, r.FineSpeed
         FROM recipeData r
         LEFT JOIN MaterialData m ON r.SiloNo = m.SiloNo
         WHERE r.Category = ?
         
     """
     # query = """
-    #     SELECT "Index", SiloNo, MaterialName, SetWeight, FineWeight, Tolerance
+    #     SELECT "Index", SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, CoarseSpeed, FineSpeed 
     #     FROM recipeData
     #     WHERE Category = ?
     #     """
@@ -367,7 +369,7 @@ def add_row():
     # --------------------------------------------------------------
     try:
         cursorWrite.execute("""
-            INSERT INTO recipeData (SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, Category)
+            INSERT INTO recipeData (SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, Category, CoarseSpeed, FineSpeed)
             VALUES (?, ?, ?, ?, ?, ?)
         """, (
             silo,
@@ -375,6 +377,8 @@ def add_row():
             data.get("SetWeight"),
             data.get("FineWeight"),
             data.get("Tolerance"),
+            data.get("CoarseSpeed"),
+            data.get("FineSpeed"),
             category
         ))
 
@@ -408,7 +412,10 @@ def export_recipe_data():
                 COALESCE(m.MaterialName, r.MaterialName) AS MaterialName,
                 r.SetWeight,
                 r.FineWeight,
-                r.Tolerance
+                r.Tolerance,
+                r.CoarseSpeed,
+                r.FineSpeed
+
             FROM recipeData r
             LEFT JOIN MaterialData m ON r.SiloNo = m.SiloNo
             WHERE r.Category = ?
@@ -457,7 +464,7 @@ def import_recipe_excel():
         # Load Excel into pandas
         df = pd.read_excel(file)
 
-        required_cols = ["SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance"]
+        required_cols = ["SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed"]
 
         for col in required_cols:
             if col not in df.columns:
@@ -490,14 +497,16 @@ def import_recipe_excel():
                 return jsonify({"success": False, "error": f"Silo not found: {silo}"}), 400
 
             cursorWrite.execute("""
-                INSERT INTO recipeData (SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, Category)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO recipeData (SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, Category, CoarseSpeed, FineSpeed)
+                # VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 silo,
                 mr[0],                              # MaterialName from MaterialData
                 row["SetWeight"],
                 row["FineWeight"],
                 row["Tolerance"],
+                row["CoarseSpeed"],
+                row["FineSpeed"],
                 category
             ))
 
@@ -517,6 +526,8 @@ def update_row(index):
     set_weight = data.get("SetWeight")
     fine_weight = data.get("FineWeight")
     tolerance = data.get("Tolerance")
+    CoarseSpeed = data.get("CoarseSpeed")
+    FineSpeed = data.get("FineSpeed")
 
     # ------------------------------
     # Validate required fields
@@ -574,7 +585,9 @@ def update_row(index):
                 MaterialName = ?, 
                 SetWeight = ?, 
                 FineWeight = ?, 
-                Tolerance = ?
+                Tolerance = ?,
+                CoarseSpeed = ?,
+                FineSpeed = ?                        
             WHERE "Index" = ?
         """, (
             silo,
@@ -583,6 +596,8 @@ def update_row(index):
             set_weight,
             fine_weight,
             tolerance,
+            CoarseSpeed,
+            FineSpeed,
             index
         ))
 
@@ -710,7 +725,28 @@ def api_plc_data():
     except Exception as e:
         print(f"❌ API Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+    
+def get_column_settings():
+    """
+    Returns True if CoarseSpeed and FineSpeed
+    should be displayed in the report.
+    Reads the persisted value from Info_DB.
+    """
+    try:
+        conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+        cursorRead.execute(
+            "SELECT Info FROM Info_DB WHERE Particulars = 'ShowSpeedColumns'"
+        )
+        row = cursorRead.fetchone()
+        conn.close()
 
+        if row is None:
+            return True  # default: show columns until a user changes it
+
+        return str(row[0]) == "1"
+    except Exception as e:
+        print("❌ get_column_settings error:", e)
+        return True
 # ===============================================================
 # ✅ PDF REPORT DOWNLOAD
 # ===============================================================
@@ -722,7 +758,15 @@ def api_plc_data_pdf():
             return jsonify({"success": False, "error": "BatchNo missing"}), 400
 
         df_pivot, df_string, daily_batch_no, df_cal_sum = main.report_data_process(batch_no)
-        pdf_bytes = Report.generate_pdf_report(df_pivot, df_string, batch_no, df_cal_sum)
+        show_speed = get_column_settings()
+
+        pdf_bytes = Report.generate_pdf_report(
+            df_pivot,
+            df_string,
+            batch_no,
+            df_cal_sum,
+            include_speed=show_speed
+        )
 
         return send_file(
             io.BytesIO(pdf_bytes),
@@ -745,7 +789,15 @@ def api_plc_data_excel():
             return jsonify({"success": False, "error": "BatchNo missing"}), 400
 
         df_pivot, df_string, daily_batch_no, df_cal_sum = main.report_data_process(batch_no)
-        excel_bytes = Report.generate_excel_report(df_pivot, df_string, batch_no, df_cal_sum)
+        show_speed = get_column_settings()
+
+        excel_bytes = Report.generate_excel_report(
+            df_pivot,
+            df_string,
+            batch_no,
+            df_cal_sum,
+            include_speed=show_speed
+        )
 
         return send_file(
             io.BytesIO(excel_bytes),
@@ -1150,7 +1202,43 @@ def update_email():
             "success": False,
             "error": str(e)
         })
-    
+@app.route("/api/settings/save_column_settings", methods=["POST"])
+def save_column_settings():
+    try:
+        data = request.get_json() or {}
+        show = data.get("show_cspeed_fspeed", True)
+
+        conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+
+        cursorRead.execute(
+            "SELECT COUNT(*) FROM Info_DB WHERE Particulars = 'ShowSpeedColumns'"
+        )
+        exists = cursorRead.fetchone()[0]
+
+        if exists:
+            cursorWrite.execute(
+                "UPDATE Info_DB SET Info = ? WHERE Particulars = 'ShowSpeedColumns'",
+                ("1" if show else "0",)
+            )
+        else:
+            cursorWrite.execute(
+                "INSERT INTO Info_DB (Particulars, Info) VALUES (?, ?)",
+                ("ShowSpeedColumns", "1" if show else "0")
+            )
+
+        conn.commit()
+        conn.close()
+        return jsonify({"success": True})
+
+    except Exception as e:
+        print("❌ save_column_settings error:", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/settings/get_column_settings", methods=["GET"])
+def api_get_column_settings():
+    return jsonify({"success": True, "show_cspeed_fspeed": get_column_settings()})    
+
 @app.route("/api/settings/update_report", methods=["POST"])
 def update_report():
     try:

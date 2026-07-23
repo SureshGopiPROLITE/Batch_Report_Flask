@@ -624,7 +624,7 @@ body {
 
 .inv-navbar-right.recipe .icon-button {
     height: 4vh;
-    width: 3rem;
+    width: 2.6rem;
     border-radius: 0.3rem;
     background-color: #005da2;
     color: white;
@@ -1206,7 +1206,7 @@ body {
 ============================== */
 .add-btn {
   height: 4vh;
-  width: 6rem;
+  width: 4rem;
   border-radius: 0.3rem;
   background-color: #005da2;
   color: white;
@@ -1861,7 +1861,56 @@ tr.editing input:focus {
 .card-body{
     padding:24px;
 }
+/* ==========================================================
+   Recipe Table Columns
+========================================================== */
 
+.column-toggle-group{
+    display:flex;
+    align-items:flex-start;
+    gap:12px;
+}
+
+.column-toggle-list{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+    padding:12px 14px;
+    border:1px solid #ced4da;
+    border-radius:6px;
+    background:#fff;
+    min-height:50px;
+}
+
+.toggle-row{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-size:14px;
+    font-weight:500;
+    color:#212529;
+    cursor:pointer;
+}
+
+.toggle-row input[type="checkbox"]{
+    width:18px;
+    height:18px;
+    accent-color:#0d6efd;
+    cursor:pointer;
+    flex-shrink:0;
+}
+
+.toggle-row:hover{
+    color:#0d6efd;
+}
+
+.column-toggle-group .set-button{
+    height:38px;
+    min-width:60px;
+    margin-top: 4px;
+    align-self:flex-start;
+}
 /* ===========================
    FORM
 =========================== */
@@ -1983,7 +2032,7 @@ button:hover{
     display:flex;
     justify-content:space-between;
     align-items:center;
-    padding:18px;
+    padding:15px;
     background:#f8fafc;
     border:1px solid #e5e7eb;
     border-radius:10px;
@@ -1999,7 +2048,7 @@ button:hover{
 
 .backup-info strong{
     display:block;
-    font-size:17px;
+    font-size:15px;
     font-weight:600;
 }
 
@@ -2026,7 +2075,7 @@ button:hover{
     background:#f8fafc;
     border:1px solid #e5e7eb;
     border-radius:10px;
-    padding:18px;
+    padding:14px;
     margin-bottom:20px;
 }
 
@@ -2035,7 +2084,7 @@ button:hover{
     justify-content:space-between;
     align-items:center;
     font-size:14px;
-    color:#4b5563;
+    color:#000000;
     margin-bottom:10px;
 }
 

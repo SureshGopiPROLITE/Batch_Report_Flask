@@ -17,48 +17,50 @@
     <div class="settings-grid">
 
         <!-- GENERAL SETTINGS -->
-        {% if role in ['admin', 'superadmin'] %}
-        <div class="settings-card">
-            <div class="card-header">
-                <h3>⚙ General Settings</h3>
+{% if role in ['admin', 'superadmin'] %}
+
+<div class="settings-card">
+    <div class="card-header">
+        <h3>⚙ General Settings</h3>
+    </div>
+
+        <div class="card-body">
+
+            <div class="form-row">
+                <label>Enter Email ID</label>
+                <div class="input-group">
+                    <input type="email" id="emailInput" placeholder="Enter Email ID">
+                    <button id="setEmailIDBtn" class="set-button">Save</button>
+                </div>
             </div>
 
-            <div class="card-body">
+            <div class="form-row">
+                <label>Report Name</label>
+                <div class="input-group">
+                    <input
+                        type="text"
+                        id="reportNameInput"
+                        placeholder="Enter Report Name">
 
-                <div class="form-row">
-                    <label>Enter Email ID</label>
-                    <div class="input-group">
-                        <input type="email" id="emailInput" placeholder="Enter Email ID">
-                        <button id="setEmailIDBtn" class="set-button">Save</button>
-                    </div>
+                    <button
+                        id="setReportNameBtn"
+                        class="set-button">
+                        Save
+                    </button>
                 </div>
-
-                <div class="form-row">
-                    <label>Report Name</label>
-                    <div class="input-group">
-                        <input
-                            type="text"
-                            id="reportNameInput"
-                            placeholder="Enter Report Name">
-
-                        <button
-                            id="setReportNameBtn"
-                            class="set-button">
-                            Save
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Hidden Logo Upload Input -->
-                <input
-                    type="file"
-                    id="logoFileInput"
-                    accept="image/*"
-                    style="display:none;">
-
             </div>
+
+            <!-- Hidden Logo Upload Input -->
+            <input
+                type="file"
+                id="logoFileInput"
+                accept="image/*"
+                style="display:none;">
+
         </div>
-        {% endif %}
+    </div>
+    {% endif %}
+
 
         <!-- PLC CONNECTION -->
         {% if role == 'superadmin' %}
@@ -109,7 +111,7 @@
                     </button>
 
                     <button id="saveBtn"style="margin-left: 550px;" class="set-button"> 
-                        save
+                        Save
                     </button>
                 </div>
 
@@ -160,7 +162,7 @@
 
             <div class="db-storage-row">
 
-                <span>Storage Used</span>
+                <strong>Storage Used</strong>
 
                 <span>
                     {{ db_data.storage_used_gb | default(0) }}
@@ -187,7 +189,7 @@
         <!-- Custom Date Range Backup -->
         <div class="backup-group">
 
-            <label style="margin-bottom: 15px;"><strong>Custom Date Range Backup</strong></label>
+            <label style="margin-bottom: 12px;"><strong>Custom Date Range Backup</strong></label>
 
 
             <div class="input-group">
@@ -282,7 +284,21 @@
 
                     </tbody>
 
-                </table>
+                </table><br>
+
+
+                <!-- Recipe Table Columns settings -->
+            <div class="form-row">
+                <label>Recipe Table Columns Settings</label>
+                <div class="input-group column-toggle-group">
+                    <div class="column-toggle-list">
+                        <label class="toggle-row">
+                            <input type="checkbox" id="CSpeed" checked> Show   CoarseSpeed / FineSpeed
+                        </label>
+                    </div>
+                    <button id="saveColumnSettingsBtn" class="set-button">Save</button>
+                </div>
+            </div>
 
                 <!-- Hidden Config Upload -->
                 <input
@@ -719,5 +735,47 @@ document.addEventListener("DOMContentLoaded", function () {
 // });
 
 
+</script>
+
+<!-- ===================================== -->
+<!-- RECIPE TABLE COLUMN VISIBILITY SCRIPT -->
+<!-- ===================================== -->
+<script>
+document.addEventListener("DOMContentLoaded", async () => {
+    const checkbox = document.getElementById("CSpeed");
+    if (!checkbox) return;
+
+    try {
+        const res = await fetch("/api/settings/get_column_settings");
+        const result = await res.json();
+        checkbox.checked = !!result.show_cspeed_fspeed;
+    } catch (err) {
+        console.error(err);
+    }
+});
+
+document.getElementById("saveColumnSettingsBtn")?.addEventListener("click", async () => {
+    const checkbox = document.getElementById("CSpeed");
+    const showCSpeed = checkbox.checked;
+
+    try {
+        const res = await fetch("/api/settings/save_column_settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ show_cspeed_fspeed: showCSpeed })
+        });
+
+        const result = await res.json();
+
+        if (result.success) {
+            alert("Column settings saved");
+        } else {
+            alert(result.error || "Failed to save column settings");
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Server Error");
+    }
+});
 </script>
 {% endblock %}
