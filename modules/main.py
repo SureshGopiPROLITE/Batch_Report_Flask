@@ -331,14 +331,28 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
             }
 
         # ------------------ LINE CHART LOGIC (MULTI PLANT) ------------------
-        df_batches["TimeStamp"] = pd.to_datetime(df_batches["TimeStamp"], errors="coerce")
+              
 
-        if time_diff_hours < 24:
-            df_batches["TimeKey"] = df_batches["TimeStamp"].dt.floor("H")
-            time_fmt = "%H:00"
+        df_batches["TimeStamp"] = pd.to_datetime(
+            df_batches["TimeStamp"],
+            errors="coerce"
+        )
+
+        # Hourly chart for 24 hours or less
+        if time_diff_hours <= 24:
+
+            df_batches["TimeKey"] = (
+                df_batches["TimeStamp"]
+                .dt.floor("h")
+            )
+
         else:
-            df_batches["TimeKey"] = df_batches["TimeStamp"].dt.date
-            time_fmt = "%Y-%m-%d"
+
+            # Daily chart
+            df_batches["TimeKey"] = (
+                df_batches["TimeStamp"]
+                .dt.date
+            )
 
         grouped = (
             df_batches
@@ -348,13 +362,13 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
             .sort_values("TimeKey")
         )
 
+        # Convert to string for JSON
         grouped["TimeKey"] = grouped["TimeKey"].astype(str)
 
         line_chart = grouped.to_dict(orient="records")
 
-
         print("Grouped counts (preview):")
-        print(grouped.head(10))
+        print(grouped.head(20))
 
 
         # ---------------------- SUMMARY -----------------------

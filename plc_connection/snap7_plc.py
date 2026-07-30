@@ -7,6 +7,8 @@ from datetime import datetime
 from snap7.util import set_bool ,set_real, set_int, set_string, set_dint
 from snap7.util import get_bool, get_real, get_int, get_dint, get_string
 import re
+from datetime import datetime
+
 
 def snap7Connect(plcIP, rack, slot):
     try:

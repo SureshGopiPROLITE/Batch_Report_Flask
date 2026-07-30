@@ -14,7 +14,7 @@ import threading
 import plotly
 import subprocess
 import os
-
+import snap7
 import sqlite3
 import tempfile
 from sqlalchemy import text

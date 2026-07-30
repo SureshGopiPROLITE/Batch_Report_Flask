@@ -5,9 +5,12 @@ services:
     build: .
     container_name: skew_batch
     ports:
-      - "5000:5000"   # Flask main app
-      - "8050:8050"   # Dash or internal redirect
+      - "5000:5000"
+      - "8050:8050"
     environment:
-      - FLASK_ENV=production
-      - PYTHONUNBUFFERED=1
+      FLASK_ENV: production
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Kolkata
+    volumes:
+      - ./PLCDB2.db:/app/PLCDB2.db
     restart: always

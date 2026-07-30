@@ -5,10 +5,10 @@ import logging
 from database import Sqlite
 from modules import main
 from config import sqliteCon
-from datetime import datetime
 from plc_connection import pylogix, snap7_plc
 import os
 import logging
+from datetime import datetime
 import threading
 from logging.handlers import RotatingFileHandler
 # Generate Summary
@@ -113,6 +113,7 @@ def stop_monitoring():
     """Call this from your Flask route to stop monitoring."""
     stop_event.set()
 
+
 # === Monitoring loop (runs inside a background thread) ===
 def monitor_loop(plc, dfPlcdb, server):
     try:
@@ -143,6 +144,7 @@ def trigger_connect(server):
             plcIP, rack, slot = node.split(',')
             plc = snap7_plc.snap7Connect(plcIP, int(rack), int(slot))
             status = plc.get_cpu_state()
+            
             print(status)
             value = snap7_plc.lifeCounter(plc, dfPlcdb)
             if not value:

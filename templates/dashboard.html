@@ -402,86 +402,152 @@ function updateSummary(s) {
 function drawLineChart(data) {
 
     if (!data || data.length === 0) {
-        document.getElementById('lineChart').innerHTML =
+        document.getElementById("lineChart").innerHTML =
             "<p style='text-align:center;color:#888;'>No data available</p>";
         return;
     }
 
-    // 🔹 Extract unique TimeKeys and Plant Names
     const times = [...new Set(data.map(d => d.TimeKey))];
     const plants = [...new Set(data.map(d => d["Plant Name"]))];
 
+    // Hourly if TimeKey contains time
+    const isHourly = times[0].includes(" ");
+
+    // Check whether hourly data spans multiple dates
+    let multipleDates = false;
+
+    if (isHourly) {
+        const dates = [...new Set(times.map(t => t.split(" ")[0]))];
+        multipleDates = dates.length > 1;
+    }
+
     let table = new google.visualization.DataTable();
-    table.addColumn('date', 'Time');
 
-    // 🔹 One column per Plant → legend auto generated
-    plants.forEach(p => table.addColumn('number', p));
+    if (isHourly)
+        table.addColumn("datetime", "Time");
+    else
+        table.addColumn("date", "Date");
 
-    // 🔹 Detect Hourly or Daily
-    const isHourly = times[0].includes(":");
+    plants.forEach(p => table.addColumn("number", p));
 
     times.forEach(t => {
 
         let dateObj;
 
         if (isHourly) {
-            // Hourly → today + HH:00
-            const [hh] = t.split(":");
-            dateObj = new Date();
-            dateObj.setHours(parseInt(hh), 0, 0, 0);
+
+            // Example:
+            // 2026-07-29 06:30:00
+            dateObj = new Date(t.replace(" ", "T"));
+
         } else {
-            // Daily → yyyy-mm-dd
-            dateObj = new Date(t);
+
+            // Example:
+            // 2026-07-29
+
+            const [y, m, d] = t.split("-").map(Number);
+
+            // Create LOCAL date (avoids 5:30 AM)
+            dateObj = new Date(y, m - 1, d);
+
         }
 
         let row = [dateObj];
 
         plants.forEach(p => {
+
             const rec = data.find(
-                d => d.TimeKey === t && d["Plant Name"] === p
+                d => d.TimeKey === t &&
+                     d["Plant Name"] === p
             );
-            row.push(rec ? rec.BatchCount : 0);
+
+            row.push(rec ? Number(rec.BatchCount) : null);
+
         });
 
         table.addRow(row);
+
     });
 
-    let chart = new google.visualization.LineChart(
-        document.getElementById('lineChart')
+    // Select X-axis format
+    let xAxisFormat;
+
+    if (isHourly) {
+
+        if (multipleDates)
+            xAxisFormat = "dd MMM HH:mm";     // 29 Jul 06:30
+        else
+            xAxisFormat = "HH:mm";            // 06:30
+
+    } else {
+
+        xAxisFormat = "dd MMM yyyy";          // 29 Jul 2026
+
+    }
+
+    const chart = new google.visualization.LineChart(
+        document.getElementById("lineChart")
     );
 
     chart.draw(table, {
+
         height: 330,
-        curveType: 'function',
+
+        curveType: "function",
+
         pointSize: 4,
+
         dataOpacity: 0.9,
 
-        legend: { position: 'top' },
+        legend: {
+            position: "top"
+        },
 
         hAxis: {
+
+            format: xAxisFormat,
+
             slantedText: true,
+
             slantedTextAngle: 45,
-            textStyle: { fontSize: 15 }
-            
+
+            textStyle: {
+                fontSize: 12
+            },
+
+            gridlines: {
+                count: -1
+            }
+
         },
 
         vAxis: {
+
             title: "Batch Weight (Kg)",
-            viewWindow: { min: 0 },
+
+            viewWindow: {
+                min: 0
+            },
+
             titleTextStyle: {
                 italic: false,
                 fontSize: 20,
                 color: "#000"
             }
+
         },
 
-        tooltip: { trigger: 'both' },
+        tooltip: {
+            trigger: "both"
+        },
 
         chartArea: {
-            width: '80%',
-            height: '55%'
-        },
+            width: "82%",
+            height: "60%"
+        }
+
     });
+
 }
 
 /* =========================

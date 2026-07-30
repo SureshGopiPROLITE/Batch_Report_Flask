@@ -2,8 +2,13 @@ FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-# Install system libraries required for WeasyPrint
+# Install system libraries required for WeasyPrint and timezone
 RUN apt-get update && apt-get install -y \
+    tzdata \
+    python3-tk \
+    tk \
+    tcl \
+    tk-dev \
     wget \
     fontconfig \
     libcairo2 \
@@ -22,7 +27,12 @@ RUN apt-get update && apt-get install -y \
     libxft2 \
     build-essential \
     xz-utils \
+    && ln -sf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime \
+    && echo "Asia/Kolkata" > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
+
+# Set container timezone to IST
+ENV TZ=Asia/Kolkata
 
 # Install Python dependencies
 COPY requirements.txt .
