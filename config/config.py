@@ -1,8 +1,7 @@
-# DB_CONFIG = {
-#     'dbname': 'Batch_Report_PLCDB',
-#     'user': 'postgres',
-#     'password': 'root',
-#     'host': 'localhost',
-#     'port': '5432'
-# }
-DB_CONFIG = "PLCDB2.db"
+DB_CONFIG = {
+    'dbname': 'PLCDB2',
+    'user': 'postgres',
+    'password': '12345678',
+    'host': 'localhost',
+    'port': '5434'
+}

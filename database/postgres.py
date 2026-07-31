@@ -1,28 +1,53 @@
 from sqlalchemy import create_engine
 import shutil
 import os
+import subprocess
 from tkinter import Tk, filedialog
-import sqlite3
+import psycopg2
 import pandas as pd
 from datetime import datetime, timedelta
+# from database import postgres
+
+# ---------------------------------------------------------------------------
+# Connection settings
+# ---------------------------------------------------------------------------
+DB_HOST = "localhost"
+DB_PORT = "5434"
+DB_NAME = "PLCDB2"
+DB_USER = "postgres"
+DB_PASSWORD = "12345678"
+
+ENGINE_URL = (
+    f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}"
+    f"@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+)
 
 
-
-def sqlite():
-    conn = sqlite3.connect('PLCDB2.db')
+def postgres():  # Keep same name so the rest of the project works unchanged
+    """
+    Returns the same 5-tuple the rest of the codebase expects:
+    (cursorRead, cursorWrite, engineConRead, engineConWrite, conn)
+    but backed by Postgres instead of postgres.
+    """
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        database=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+    )
     cursorRead = conn.cursor()
     cursorWrite = conn.cursor()
-    engine = create_engine('sqlite:///PLCDB2.db')
+    engine = create_engine(ENGINE_URL)
     engineConRead = engine.connect()
     engineConWrite = engine.connect()
     return cursorRead, cursorWrite, engineConRead, engineConWrite, conn
 
 
-
 def calculate_silo_diff(dfPlcdb: pd.DataFrame) -> pd.DataFrame:
     """
     Calculate absolute difference (kg) and percentage between SetWeight and ActualWeight for each Silo.
-    Returns dfPlcdb with new rows added.
+    Returns dfPlcdb with new rows added. (Pure pandas - no SQL dialect changes needed.)
     """
     results = [
         {
@@ -49,24 +74,22 @@ def calculate_silo_diff(dfPlcdb: pd.DataFrame) -> pd.DataFrame:
 
 
 def backup_database():
+    """
+    postgres backups were a plain file copy. Postgres has no single db file to
+    copy, so this now shells out to pg_dump (must be installed and on PATH)
+    and writes a .dump (custom-format) file that can be restored with
+    pg_restore. The save-file dialog UX is kept the same as before.
+    """
     try:
         # Hide the root window
         root = Tk()
         root.withdraw()
-        
-        # Default database file path
-        default_database_path = os.path.abspath("PLCDB2.db")
-        
-        # Check if the default database file exists
-        if not os.path.exists(default_database_path):
-            print(f"Default database file '{default_database_path}' does not exist.")
-            return
-        
+
         # Ask the user to select the destination for the backup
         backup_path = filedialog.asksaveasfilename(
-            title="Select Backup Destination", 
-            defaultextension=".db", 
-            filetypes=[("SQLite Database Files", "*.db")]
+            title="Select Backup Destination",
+            defaultextension=".dump",
+            filetypes=[("Postgres Dump Files", "*.dump")]
         )
         if not backup_path:
             print("No backup destination selected.")
@@ -74,47 +97,68 @@ def backup_database():
 
         # Ensure the backup path directory exists, create if it does not
         backup_dir = os.path.dirname(backup_path)
-        if not os.path.exists(backup_dir):
+        if backup_dir and not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
-        
-        # Perform the backup by copying the database file
-        shutil.copy2(default_database_path, backup_path)
-        
-        print(f"Backup of database '{default_database_path}' completed successfully.")
-    
+
+        # Run pg_dump, passing the password via the environment (avoids
+        # putting it on the command line / in shell history)
+        env = os.environ.copy()
+        env["PGPASSWORD"] = DB_PASSWORD
+
+        cmd = [
+            "pg_dump",
+            "-h", DB_HOST,
+            "-p", DB_PORT,
+            "-U", DB_USER,
+            "-F", "c",              # custom format, restore with pg_restore
+            "-f", backup_path,
+            DB_NAME,
+        ]
+
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"pg_dump failed: {result.stderr}")
+            return
+
+        print(f"Backup of database '{DB_NAME}' completed successfully at '{backup_path}'.")
+
+    except FileNotFoundError:
+        print("pg_dump was not found. Make sure the PostgreSQL client tools are installed and on PATH.")
     except Exception as e:
         print(f"Error occurred: {str(e)}")
-  
+
+
 def show_data(conn, hours, from_time, to_time, engineConRead):
     try:
         if hours == "Custom":
             print("Time:", from_time, to_time)
-            
+
             from_time_dt = datetime.fromisoformat(from_time)
             to_time_dt = datetime.fromisoformat(to_time)
 
             # Calculate the difference
             date_diff = to_time_dt - from_time_dt
-            print("Date Difference:", date_diff.days)    
-            
+            print("Date Difference:", date_diff.days)
+
             if date_diff.days >= 30:
                 # Query database for data between specified timestamps from both tables
                 query = f"""
                 SELECT * FROM plc_data
-                WHERE TimeStamp BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
-                
+                WHERE "TimeStamp" BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
+
                 UNION ALL
-                
+
                 SELECT * FROM plc_data
-                WHERE TimeStamp BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
-                ORDER BY TimeStamp ASC;
+                WHERE "TimeStamp" BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
+                ORDER BY "TimeStamp" ASC;
                 """
             else:
-                # Query database for data between specified timestamps   
+                # Query database for data between specified timestamps
                 query = f"""
                 SELECT * FROM plc_data
-                WHERE TimeStamp BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
-                ORDER BY TimeStamp ASC;
+                WHERE "TimeStamp" BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
+                ORDER BY "TimeStamp" ASC;
                 """
             print("Executing query:", query)
             df = pd.read_sql_query(query, engineConRead)
@@ -138,8 +182,8 @@ def show_data(conn, hours, from_time, to_time, engineConRead):
             query = f"""
                 SELECT *
                 FROM plc_data
-                WHERE TimeStamp >= '{from_time}'
-                ORDER BY TimeStamp ASC;
+                WHERE "TimeStamp" >= '{from_time}'
+                ORDER BY "TimeStamp" ASC;
             """
             print("Executing query:", query)
             df = pd.read_sql_query(query, engineConRead)
@@ -154,7 +198,7 @@ def show_data(conn, hours, from_time, to_time, engineConRead):
     except Exception as e:
         print(f"An error occurred: {e}")
         return None
-    
+
 
 def showBatch(conn, hours, from_time, to_time, engineConRead):
     try:
@@ -164,12 +208,12 @@ def showBatch(conn, hours, from_time, to_time, engineConRead):
             from_time_dt = datetime.fromisoformat(from_time)
             to_time_dt = datetime.fromisoformat(to_time)
             date_diff = to_time_dt - from_time_dt
-            print("Date Difference:", date_diff.days)    
+            print("Date Difference:", date_diff.days)
 
             query = f"""
-            SELECT DISTINCT * FROM Batches
-            WHERE TimeStamp BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
-            ORDER BY TimeStamp ASC;
+            SELECT DISTINCT * FROM "Batches"
+            WHERE "TimeStamp" BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
+            ORDER BY "TimeStamp" ASC;
             """
 
         elif hours in ["1 Hr", "4 Hr", "8 Hr", "12 Hr", "24 Hr"]:
@@ -178,9 +222,9 @@ def showBatch(conn, hours, from_time, to_time, engineConRead):
             from_time = from_time_dt.strftime('%Y-%m-%d %H:%M:%S')
 
             query = f"""
-            SELECT DISTINCT * FROM Batches
-            WHERE TimeStamp >= '{from_time}'
-            ORDER BY TimeStamp ASC;
+            SELECT DISTINCT * FROM "Batches"
+            WHERE "TimeStamp" >= '{from_time}'
+            ORDER BY "TimeStamp" ASC;
             """
 
         else:
@@ -199,15 +243,21 @@ def showBatch(conn, hours, from_time, to_time, engineConRead):
         print(f"An error occurred: {e}")
         return None
 
+
 def insert_data_into_sqlite(cursor, conn, dfPlcExcel):
+    """
+    Name kept as insert_data_into_sqlite so callers don't need to change.
+    Table/column identifiers are double-quoted since Postgres lowercases
+    unquoted identifiers and this schema relies on mixed-case names.
+    """
     try:
         # Drop the table if it exists
-        drop_table_query = "DROP TABLE IF EXISTS Data"
+        drop_table_query = 'DROP TABLE IF EXISTS "Data"'
         cursor.execute(drop_table_query)
         print("Dropped existing table (if any).")
 
-        # Determine SQLite data types
-        sqlite_types = {
+        # Determine Postgres data types
+        postgres_types = {
             'int64': 'INTEGER',
             'float64': 'REAL',
             'bool': 'BOOLEAN',
@@ -215,33 +265,34 @@ def insert_data_into_sqlite(cursor, conn, dfPlcExcel):
         }
 
         # Dynamically generate CREATE TABLE query based on DataFrame columns
-        columns = ', '.join([f"{col} {sqlite_types[str(dfPlcExcel[col].dtype)]}" for col in dfPlcExcel.columns])
+        columns = ', '.join([f'"{col}" {postgres_types[str(dfPlcExcel[col].dtype)]}' for col in dfPlcExcel.columns])
         create_table_query = f"""
-            CREATE TABLE IF NOT EXISTS Data ({columns});
+            CREATE TABLE IF NOT EXISTS "Data" ({columns});
         """
         cursor.execute(create_table_query)
         print("Created new table based on DataFrame columns.")
 
         # Insert data into the table
         for index, row in dfPlcExcel.iterrows():
-            placeholders = ', '.join(['?' for _ in dfPlcExcel.columns])
-            columns = ', '.join(dfPlcExcel.columns)
-            sql = f"INSERT INTO Data ({columns}) VALUES ({placeholders})"
+            placeholders = ', '.join(['%s' for _ in dfPlcExcel.columns])
+            columns = ', '.join([f'"{c}"' for c in dfPlcExcel.columns])
+            sql = f'INSERT INTO "Data" ({columns}) VALUES ({placeholders})'
             cursor.execute(sql, tuple(row))
         print("Inserted data into the new table.")
-        
+
         # Commit changes
         conn.commit()
-        print("Data committed to SQLite database.")
-        
+        print("Data committed to Postgres database.")
+
     except Exception as e:
         print(f"Error occurred: {str(e)}")
-    
+
+
 def dfPlc(conn, softwaretype):
     try:
         print("Inside the DF")
         print("Software Type:", softwaretype)
-        select_query = "SELECT * FROM Data"
+        select_query = 'SELECT * FROM "Data"'
         dfPlcdb = pd.read_sql_query(select_query, conn)
         print("Data Type:", dfPlcdb)
         if softwaretype == 0:
@@ -258,7 +309,7 @@ def dfPlc(conn, softwaretype):
             if col in dfPlcdb.columns:
                 # Convert non-numeric values to NaN and then fill with a default value if needed
                 dfPlcdb[col] = pd.to_numeric(dfPlcdb[col], errors='coerce')
-                dfPlcdb[col].fillna(0, inplace=True) 
+                dfPlcdb[col].fillna(0, inplace=True)
         print(dfPlcdb)
         return dfPlcdb
 
@@ -267,11 +318,10 @@ def dfPlc(conn, softwaretype):
         return None
 
 
-
 def insertBatch(df):
-    
+
     # Establish database connection
-    cursorRead, cursorWrite, engineConRead, engineConWriten, conn = sqlite()
+    cursorRead, cursorWrite, engineConRead, engineConWriten, conn = postgres()
 
     # Separate Info category from other data
     df_string, df = df[df["Category"] == "Info"], df[df["Category"] != "Info"]
@@ -283,14 +333,14 @@ def insertBatch(df):
     df_pivot_1 = df_pivot_1.reset_index()
 
     # Reorder columns (ensure these column names exist in your dataframe)
-    column_order = ["BatchNo", "TimeStamp", "Plant Name", "Recipe Name", "Start Date Time", "End Date Time"]  
+    column_order = ["BatchNo", "TimeStamp", "Plant Name", "Recipe Name", "Start Date Time", "End Date Time"]
     df_pivot_1 = df_pivot_1[column_order]
 
     # Extract Total Batch Weight from df
     df_weight = df[df["Name"] == "ActualWeight"]
     df_weight = df_weight.groupby("BatchNo")["Value"].sum().reset_index()
 
-    # ✅ Round to 2 decimal places
+    # Round to 2 decimal places
     df_weight["Value"] = pd.to_numeric(
         df_weight["Value"],
         errors="coerce"
@@ -304,21 +354,20 @@ def insertBatch(df):
     df_pivot_1 = df_pivot_1.merge(df_weight, on="BatchNo", how="left")
 
     # Insert df_pivot_1 into the Batches table
+    # (to_sql via SQLAlchemy quotes mixed-case identifiers automatically)
     df_pivot_1.to_sql("Batches", con=engineConWriten, if_exists="append", index=False)
 
-   
 
-
-#recipe tag inc
+# recipe tag inc
 def insert_data_into_sqlite_rec(cursor, conn, dfPlcExcel):
     try:
         # Drop the table if it exists
-        drop_table_query = "DROP TABLE IF EXISTS RecipeTagName"
+        drop_table_query = 'DROP TABLE IF EXISTS "RecipeTagName"'
         cursor.execute(drop_table_query)
         print("Dropped existing table (if any).")
 
-        # Determine SQLite data types
-        sqlite_types = {
+        # Determine Postgres data types
+        postgres_types = {
             'int64': 'INTEGER',
             'float64': 'REAL',
             'bool': 'BOOLEAN',
@@ -326,36 +375,32 @@ def insert_data_into_sqlite_rec(cursor, conn, dfPlcExcel):
         }
 
         # Dynamically generate CREATE TABLE query based on DataFrame columns
-        columns = ', '.join([f"{col} {sqlite_types[str(dfPlcExcel[col].dtype)]}" for col in dfPlcExcel.columns])
+        columns = ', '.join([f'"{col}" {postgres_types[str(dfPlcExcel[col].dtype)]}' for col in dfPlcExcel.columns])
         create_table_query = f"""
-            CREATE TABLE IF NOT EXISTS RecipeTagName ({columns});
+            CREATE TABLE IF NOT EXISTS "RecipeTagName" ({columns});
         """
         cursor.execute(create_table_query)
         print("Created new table based on DataFrame columns.")
 
         # Insert data into the table
         for index, row in dfPlcExcel.iterrows():
-            placeholders = ', '.join(['?' for _ in dfPlcExcel.columns])
-            columns = ', '.join(dfPlcExcel.columns)
-            sql = f"INSERT INTO RecipeTagName ({columns}) VALUES ({placeholders})"
+            placeholders = ', '.join(['%s' for _ in dfPlcExcel.columns])
+            columns = ', '.join([f'"{c}"' for c in dfPlcExcel.columns])
+            sql = f'INSERT INTO "RecipeTagName" ({columns}) VALUES ({placeholders})'
             cursor.execute(sql, tuple(row))
         print("Inserted data into the new table.")
-        
+
         # Commit changes
         conn.commit()
-        print("Data committed to SQLite database.")
-        
+        print("Data committed to Postgres database.")
+
     except Exception as e:
         print(f"Error occurred: {str(e)}")
 
 
-
-import pandas as pd
-from sqlalchemy import create_engine, inspect
-
 def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
     try:
-       
+
         # Extract MaterialName values and forward-fill
         dfPlcdb['MaterialIndex'] = dfPlcdb.loc[dfPlcdb['Name'] == 'MaterialName', 'Value']
         dfPlcdb['MaterialIndex'] = dfPlcdb.groupby('Category')['MaterialIndex'].transform(lambda x: x.ffill().bfill())
@@ -373,7 +418,7 @@ def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
         df_pivot['ActualWeight'] = df_pivot['ActualWeight'].div(1000).round(2)
 
         # Fetch existing data from MaterialData table
-        existing_data = pd.read_sql('SELECT * FROM MaterialData', con=engineConRead)
+        existing_data = pd.read_sql('SELECT * FROM "MaterialData"', con=engineConRead)
         existing_data = existing_data[['SiloNo', 'MaterialName', 'TotalExtracted']]
 
         # Merge the DataFrames based on 'MaterialName'
@@ -390,16 +435,14 @@ def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
         print("----------------------------------------------------------------------------")
         print(df_merged)
 
-        # Assuming you have an established connection with cursor (cursorWrite), run the update query
+        # Run the update query (parameterized to avoid SQL injection issues)
         for index, row in df_merged.iterrows():
-            # Prepare the update query
-            update_query = f"""
-            UPDATE MaterialData
-            SET TotalExtracted = {row['TotalWeight']}
-            WHERE MaterialName = '{row['MaterialName']}';
+            update_query = """
+            UPDATE "MaterialData"
+            SET "TotalExtracted" = %s
+            WHERE "MaterialName" = %s;
             """
-            # Execute the update query
-            cursorWrite.execute(update_query)
+            cursorWrite.execute(update_query, (row['TotalWeight'], row['MaterialName']))
 
         # Commit the changes
         conn.commit()
@@ -408,9 +451,3 @@ def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
         print("----------------------------------------------------------------------------")
     except Exception as e:
         print("Error occurred:", e)
-
-
-
-
-
-

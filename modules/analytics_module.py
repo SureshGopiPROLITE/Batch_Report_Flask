@@ -4,31 +4,50 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import sqlite3
+import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from sqlalchemy import create_engine
 
-DB_CONFIG = "PLCDB2.db"
+# === Postgres connection settings ===
+# Override these via environment variables in production, e.g.:
+#   export PG_HOST=localhost PG_PORT=5432 PG_DB=plcdb PG_USER=postgres PG_PASSWORD=yourpassword
+PG_CONFIG = {
+    "host": os.environ.get("PG_HOST", "localhost"),
+    "port": os.environ.get("PG_PORT", "5434"),
+    "dbname": os.environ.get("PG_DB", "PLCDB2"),
+    "user": os.environ.get("PG_USER", "postgres"),
+    "password": os.environ.get("PG_PASSWORD", "12345678"),
+}
 
 
-# === Direct SQLite Connection (for raw cursor use) ===
+# === Direct psycopg2 Connection (for raw cursor use) ===
 def get_db_connection():
     try:
-        conn = sqlite3.connect(DB_CONFIG)
-        conn.row_factory = sqlite3.Row  # Dict-like cursor
-        cursorRead = conn.cursor()
-        cursorWrite = conn.cursor()
+        conn = psycopg2.connect(
+            host=PG_CONFIG["host"],
+            port=PG_CONFIG["port"],
+            dbname=PG_CONFIG["dbname"],
+            user=PG_CONFIG["user"],
+            password=PG_CONFIG["password"],
+        )
+        # RealDictCursor gives dict-like rows, similar to sqlite3.Row
+        cursorRead = conn.cursor(cursor_factory=RealDictCursor)
+        cursorWrite = conn.cursor(cursor_factory=RealDictCursor)
         return conn, cursorRead, cursorWrite
     except Exception as e:
-        print(f"Failed to connect to SQLite: {e}")
+        print(f"Failed to connect to Postgres: {e}")
         return None
-
 
 
 # === SQLAlchemy Engine for pandas.to_sql and read_sql ===
 def get_db_connection_engine():
     try:
-        # SQLite connection URL
-        db_url = f"sqlite:///{DB_CONFIG}"
+        # Postgres connection URL
+        db_url = (
+            f"postgresql+psycopg2://{PG_CONFIG['user']}:{PG_CONFIG['password']}"
+            f"@{PG_CONFIG['host']}:{PG_CONFIG['port']}/{PG_CONFIG['dbname']}"
+        )
 
         # Create SQLAlchemy engine
         engine = create_engine(db_url, echo=False)
@@ -36,8 +55,8 @@ def get_db_connection_engine():
         # Separate read and write connections
         engineConRead = engine.connect()
         engineConWrite = engine.connect()
-          
-        print("✅ SQLite SQLAlchemy engine created successfully.")
+
+        print("✅ Postgres SQLAlchemy engine created successfully.")
         return engine, engineConRead, engineConWrite
 
     except Exception as e:
@@ -50,6 +69,11 @@ def get_cleaned_data():
     conn, cursorRead, cursorWrite = get_db_connection()
     engine, engineConRead, engineConWrite = get_db_connection_engine()
 
+    # NOTE: if your table/column names in Postgres are lowercase (Postgres
+    # folds unquoted identifiers to lowercase by default), make sure the
+    # actual table is named plc_data (lowercase) — this matches Postgres'
+    # default folding behavior. If you migrated the schema with mixed-case
+    # names preserved (via quoted identifiers), use "plc_data" in quotes here.
     df = pd.read_sql("SELECT * FROM plc_data", engineConRead)
     print("🔹 Raw data loaded:", df.shape)
 
@@ -89,8 +113,6 @@ def get_cleaned_data():
         .rename(columns={'Error_%': 'Avg_Error_%'})
     )
 
-
-
     # Recipe info
     df_recipe = df.pivot_table(
         index=['BatchNo', 'Category'],
@@ -118,16 +140,8 @@ def get_cleaned_data():
         (merged['Avg_Error_%'] <= Q3 + 1.5 * IQR)
     ].copy()
 
-    # ❌ OLD: inplace=True ⇒ warning
-    # df_cleaned.drop_duplicates(subset=['End Date Time'], inplace=True)
-
-    # ✅ FIXED
     df_cleaned = df_cleaned.drop_duplicates(subset=['End Date Time']).copy()
 
-    # ❌ OLD: warning
-    # df_cleaned['Rank'] = np.random.randint(1, 5, len(df_cleaned))
-
-    # ✅ FIXED using .loc
     if 'Rank' not in df_cleaned.columns:
         df_cleaned.loc[:, 'Rank'] = np.random.randint(1, 5, len(df_cleaned))
 
@@ -136,8 +150,7 @@ def get_cleaned_data():
 
 # -------------------- DASH APP --------------------
 def run_dashboard():
-   
-    
+
     df_cleaned = get_cleaned_data()
 
     df_cleaned = df_cleaned.copy()
@@ -146,9 +159,9 @@ def run_dashboard():
     df_cleaned['Recipe Name'] = df_cleaned['Recipe Name'].apply(lambda x: str(x).strip())
 
     df_cleaned['Start Date Time'] = pd.to_datetime(
-    df_cleaned['Start Date Time'],format='mixed',errors='coerce')
+        df_cleaned['Start Date Time'], format='mixed', errors='coerce')
     df_cleaned['End Date Time'] = pd.to_datetime(
-    df_cleaned['End Date Time'],format='mixed',errors='coerce')
+        df_cleaned['End Date Time'], format='mixed', errors='coerce')
     df_cleaned['Rank'] = df_cleaned['Rank'].astype(str)
 
     df_cleaned = df_cleaned.dropna(subset=['Start Date Time', 'End Date Time'])
@@ -165,8 +178,6 @@ def run_dashboard():
             html.Div("📊", className="icon-box"),
             html.H1("Trend and Error Analysis of Recipes", className="main-title")
         ], className="header-title"),
-
-
 
         html.Div([
             html.Div([
@@ -334,7 +345,5 @@ def run_dashboard():
     )
 
 
-
 if __name__ == "__main__":
     run_dashboard()
-

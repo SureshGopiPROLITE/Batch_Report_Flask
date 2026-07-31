@@ -8,8 +8,8 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
 
         if selected_module == 1:
  
-            engine, engineConRead, engineConWrite = (sqliteCon.get_db_connection_engine())
-            query = text('SELECT * FROM RecipeTagName')
+            engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
+            query = text('SELECT * FROM "RecipeTagName"')
             dfTags = pd.read_sql_query(query, engineConRead)
             
             # Separate Header/Control tags and Recipe tags
@@ -38,7 +38,11 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # ---------------------------------------------------------
             # Read Recipe Data
             # ---------------------------------------------------------
-            query = text('SELECT * FROM recipeData WHERE Category = :category')
+            # "recipeData" and "Category" are mixed-case identifiers and
+            # must be quoted, or Postgres folds them to lowercase
+            # (recipedata / category) and the query silently matches
+            # nothing (or errors, if the lowercase names don't exist).
+            query = text('SELECT * FROM "recipeData" WHERE "Category" = :category')
             dfRecipe = pd.read_sql_query(query,engineConRead,params={"category": recipe_name})
             
             if dfRecipe.empty:
@@ -65,6 +69,12 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             dfInfo = pd.read_sql_query('SELECT * FROM "Info_DB";',engineConRead)
             if dfInfo.empty:
                 return {"success": False,"message": "PLC configuration not found."}
+            # NOTE: relies on row 0 of "Info_DB" being the PLC connection
+            # row. SQLite tended to preserve insertion order on a bare
+            # SELECT *, but Postgres makes no such guarantee without an
+            # explicit ORDER BY. Worth switching to
+            # WHERE "Particulars" = '<key>' once you can confirm the key
+            # name used for this row.
             node = dfInfo.loc[0, "Info"]
             plcIP, rack, slot = node.split(',')
             plc = snap7_plc.snap7Connect(plcIP,int(rack),int(slot))
@@ -126,8 +136,8 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             return {"success": True,"message": msg}
         
         elif selected_module == 2:
-            engine, engineConRead, engineConWrite = (sqliteCon.get_db_connection_engine())
-            query = text('SELECT * FROM RecipeTagName')
+            engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
+            query = text('SELECT * FROM "RecipeTagName"')
             dfTags = pd.read_sql_query(query, engineConRead)
             print(dfTags)
             # Split Header and Recipe Tags
@@ -160,7 +170,9 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # --------------------------------------------------
             # Read Recipe Data
             # --------------------------------------------------
-            query = text('SELECT * FROM recipeData ''WHERE Category = :category')
+            # Same quoting fix as the selected_module == 1 branch above:
+            # "recipeData" / "Category" are mixed-case and must be quoted.
+            query = text('SELECT * FROM "recipeData" WHERE "Category" = :category')
             dfRecipe = pd.read_sql_query(query,engineConRead,params={"category": recipe_name})
             print(dfRecipe)
             if dfRecipe.empty:return {
@@ -175,6 +187,10 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # Create Value Column
             dfRecipeTags["Value"] = (dfRecipeTags.apply(lambda row: row[row["Name"]],axis=1))
             # Keep Required Columns
+            # NOTE (pre-existing, not a DB-conversion issue): "Name" is
+            # listed twice here. Left as-is since the intended third
+            # column isn't clear from context — worth checking whether
+            # this should be a different column (e.g. a tag identifier).
             dfRecipeTags = dfRecipeTags[["SiloNo", "Name", "Name", "Value"]]
             print("Final Recipe Tags")
             print(dfRecipeTags)
@@ -192,6 +208,9 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             dfInfo = pd.read_sql_query('SELECT * FROM "Info_DB";',engineConRead)
             if dfInfo.empty:
                 return {"success": False,"message": "PLC configuration not found."}
+            # Same positional-row caveat noted in the selected_module == 1
+            # branch above (row 0 of "Info_DB" isn't guaranteed under
+            # Postgres without an explicit ORDER BY).
             plcIP = dfInfo.loc[0, "Info"]
             print("PLC IP :", plcIP)
             plc = pylogix.connectABPLC(plcIP)

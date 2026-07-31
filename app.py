@@ -6,7 +6,6 @@ from datetime import datetime
 import io
 import json
 import webbrowser
-from flask import Flask, render_template, send_file
 from modules.db_management import get_database_management_data, record_backup_event
 import snap7
 plc = snap7.client.Client()   # Create PLC object
@@ -14,9 +13,8 @@ import threading
 import plotly
 import subprocess
 import os
-import snap7
-import sqlite3
 import tempfile
+import psycopg2
 from sqlalchemy import text
 from io import BytesIO
 #Modules
@@ -24,7 +22,9 @@ from auth import authLog, authMac
 from config import sqliteCon
 from modules import monitor, main, Report, analytics_module, graphs, recipewrite, db_management
 from modules.monitor import log_file
-from database import Sqlite
+from database import postgres
+from datetime import datetime
+from sqlalchemy import text
 
 app = Flask(__name__)
 app.secret_key = '4f3d6e9a5f4b1c8d7e6a2b3c9d0e8f1a5b7c2d4e6f9a1b3c8d0e6f2a9b1d3c4'
@@ -123,29 +123,37 @@ def get_dashboard():
         }), 500
 
 
-from datetime import datetime
+
 
 @app.route("/calendar_data")
 def calendar_data():
 
-    year = request.args.get(
+    year = int(request.args.get(
         "year",
-        default=str(datetime.now().year)
+        default=datetime.now().year
+    ))
+
+    conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+    engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
+
+    query = text("""
+        SELECT
+            DATE("TimeStamp") AS date,
+            COUNT(*) AS value
+        FROM "Batches"
+        WHERE EXTRACT(YEAR FROM "TimeStamp") = :year
+        GROUP BY DATE("TimeStamp")
+        ORDER BY DATE("TimeStamp")
+    """)
+
+    df = pd.read_sql(
+        query,
+        engineConRead,
+        params={"year": year}
     )
 
-    conn = sqlite3.connect("PLCDB2.db")
-
-    query = """
-        SELECT
-            DATE(TimeStamp) AS date,
-            COUNT(*) AS value
-        FROM Batches
-        WHERE strftime('%Y', TimeStamp) = ?
-        GROUP BY DATE(TimeStamp)
-        ORDER BY DATE(TimeStamp)
-    """
-
-    df = pd.read_sql(query, conn, params=[year])
+    if "date" in df.columns:
+        df["date"] = df["date"].astype(str)
 
     conn.close()
 
@@ -179,7 +187,7 @@ def recipe():
 @app.route("/api/material/<silo_no>", methods=["GET"])
 def get_material_by_silo(silo_no):
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
-    cursorRead.execute("SELECT MaterialName FROM MaterialData WHERE SiloNo = ?", (silo_no,))
+    cursorRead.execute('SELECT "MaterialName" FROM "MaterialData" WHERE "SiloNo" = %s', (silo_no,))
     row = cursorRead.fetchone()
     conn.close()
     if row:
@@ -208,7 +216,7 @@ def add_recipe():
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
     # 🔍 Check if recipe already exists
-    cursorRead.execute("SELECT COUNT(*) FROM recipes WHERE name = ?", (name,))
+    cursorRead.execute("SELECT COUNT(*) FROM recipes WHERE name = %s", (name,))
     exists = cursorRead.fetchone()[0]
 
     if exists > 0:
@@ -218,15 +226,20 @@ def add_recipe():
     try:
         # ✅ Insert into recipes table
         cursorWrite.execute(
-            "INSERT INTO recipes (name, category) VALUES (?, ?)",
+            "INSERT INTO recipes (name, category) VALUES (%s, %s)",
             (name, name)
         )
         conn.commit()
 
         # ✅ Insert an EMPTY row in recipeData
+        # NOTE: the original SQLite version of this query was malformed
+        # (missing comma before the trailing "?", and mismatched column
+        # count) - fixed here so Category is set to the new recipe name
+        # and every column gets a value.
         cursorWrite.execute("""
-            INSERT INTO recipeData (SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, Category, CoarseSpeed, FineSpeed)
-            VALUES ('', '', '', '', '', '', '' ?)
+            INSERT INTO "recipeData"
+                ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "Category", "CoarseSpeed", "FineSpeed")
+            VALUES ('', '', '', '', '', %s, '', '')
         """, (name,))
         conn.commit()
 
@@ -245,7 +258,7 @@ def add_recipe():
 @app.route("/api/recipes_data/delete_recipe/<string:name>", methods=["DELETE"])
 def delete_recipe(name):
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
-    cursorWrite.execute("DELETE FROM recipes WHERE name=?", (name,))
+    cursorWrite.execute("DELETE FROM recipes WHERE name=%s", (name,))
     conn.commit()
     conn.close()
     return jsonify({"success": True})
@@ -266,7 +279,7 @@ def rename_recipe():
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
     # 🔍 Check if old recipe exists
-    cursorRead.execute("SELECT COUNT(*) FROM recipes WHERE name = ?", (old,))
+    cursorRead.execute("SELECT COUNT(*) FROM recipes WHERE name = %s", (old,))
     old_exists = cursorRead.fetchone()[0]
 
     if old_exists == 0:
@@ -274,7 +287,7 @@ def rename_recipe():
         return jsonify({"success": False, "error": "Old recipe does not exist"}), 404
 
     # 🔍 Check if new recipe name already exists
-    cursorRead.execute("SELECT COUNT(*) FROM recipes WHERE name = ?", (new,))
+    cursorRead.execute("SELECT COUNT(*) FROM recipes WHERE name = %s", (new,))
     new_exists = cursorRead.fetchone()[0]
 
     if new_exists > 0:
@@ -283,8 +296,8 @@ def rename_recipe():
 
     try:
         # Start rename
-        cursorWrite.execute("UPDATE recipes SET name=? WHERE name=?", (new, old))
-        cursorWrite.execute("UPDATE recipeData SET Category=? WHERE Category=?", (new, old))
+        cursorWrite.execute("UPDATE recipes SET name=%s WHERE name=%s", (new, old))
+        cursorWrite.execute('UPDATE "recipeData" SET "Category"=%s WHERE "Category"=%s', (new, old))
 
         conn.commit()
         return jsonify({"success": True})
@@ -302,12 +315,12 @@ def rename_recipe():
 def get_recipe_table(category):
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
     query = """
-        SELECT r."Index", r.SiloNo,
-            COALESCE(m.MaterialName, r.MaterialName) AS MaterialName,
-            r.SetWeight, r.FineWeight, r.Tolerance, r.CoarseSpeed, r.FineSpeed
-        FROM recipeData r
-        LEFT JOIN MaterialData m ON r.SiloNo = m.SiloNo
-        WHERE r.Category = ?
+        SELECT r."Index", r."SiloNo",
+            COALESCE(m."MaterialName", r."MaterialName") AS "MaterialName",
+            r."SetWeight", r."FineWeight", r."Tolerance", r."CoarseSpeed", r."FineSpeed"
+        FROM "recipeData" r
+        LEFT JOIN "MaterialData" m ON r."SiloNo" = m."SiloNo"
+        WHERE r."Category" = %s
         
     """
     # query = """
@@ -340,7 +353,7 @@ def add_row():
     # --------------------------------------------------------------
     # 1️⃣ Check if Silo exists in MaterialData
     # --------------------------------------------------------------
-    cursorRead.execute("SELECT MaterialName FROM MaterialData WHERE SiloNo=?", (silo,))
+    cursorRead.execute('SELECT "MaterialName" FROM "MaterialData" WHERE "SiloNo"=%s', (silo,))
     mrow = cursorRead.fetchone()
 
     if not mrow:
@@ -354,8 +367,8 @@ def add_row():
     # --------------------------------------------------------------
     cursorRead.execute("""
         SELECT COUNT(*) 
-        FROM recipeData 
-        WHERE SiloNo = ? AND Category = ?
+        FROM "recipeData" 
+        WHERE "SiloNo" = %s AND "Category" = %s
     """, (silo, category))
 
     exists = cursorRead.fetchone()[0]
@@ -367,19 +380,24 @@ def add_row():
     # --------------------------------------------------------------
     # 3️⃣ Insert new recipe row
     # --------------------------------------------------------------
+    # NOTE: the original query had 8 columns but only 6 "?" placeholders,
+    # and the params tuple's column order didn't line up with the column
+    # list (Category was last in the params but 6th in the columns).
+    # Both are fixed below.
     try:
         cursorWrite.execute("""
-            INSERT INTO recipeData (SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, Category, CoarseSpeed, FineSpeed)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO "recipeData"
+                ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "Category", "CoarseSpeed", "FineSpeed")
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             silo,
             material_name,
             data.get("SetWeight"),
             data.get("FineWeight"),
             data.get("Tolerance"),
+            category,
             data.get("CoarseSpeed"),
             data.get("FineSpeed"),
-            category
         ))
 
         conn.commit()
@@ -408,17 +426,17 @@ def export_recipe_data():
 
         query = """
             SELECT 
-                r.SiloNo,
-                COALESCE(m.MaterialName, r.MaterialName) AS MaterialName,
-                r.SetWeight,
-                r.FineWeight,
-                r.Tolerance,
-                r.CoarseSpeed,
-                r.FineSpeed
+                r."SiloNo",
+                COALESCE(m."MaterialName", r."MaterialName") AS "MaterialName",
+                r."SetWeight",
+                r."FineWeight",
+                r."Tolerance",
+                r."CoarseSpeed",
+                r."FineSpeed"
 
-            FROM recipeData r
-            LEFT JOIN MaterialData m ON r.SiloNo = m.SiloNo
-            WHERE r.Category = ?
+            FROM "recipeData" r
+            LEFT JOIN "MaterialData" m ON r."SiloNo" = m."SiloNo"
+            WHERE r."Category" = %s
         """
 
         df = pd.read_sql_query(query, conn, params=(category,))
@@ -473,13 +491,13 @@ def import_recipe_excel():
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
         # 1️⃣ Check if recipe already exists
-        cursorRead.execute("SELECT COUNT(*) FROM recipes WHERE name = ?", (category,))
+        cursorRead.execute("SELECT COUNT(*) FROM recipes WHERE name = %s", (category,))
         if cursorRead.fetchone()[0] > 0:
             return jsonify({"success": False, "error": "Recipe already exists"}), 409
 
         # 2️⃣ Insert recipe name
         cursorWrite.execute(
-            "INSERT INTO recipes (name, category) VALUES (?, ?)",
+            "INSERT INTO recipes (name, category) VALUES (%s, %s)",
             (category, category)
         )
         conn.commit()
@@ -489,16 +507,20 @@ def import_recipe_excel():
             silo = str(row["SiloNo"]).strip()
 
             # Validate silo exists in MaterialData
-            cursorRead.execute("SELECT MaterialName FROM MaterialData WHERE SiloNo=?", (silo,))
+            cursorRead.execute('SELECT "MaterialName" FROM "MaterialData" WHERE "SiloNo"=%s', (silo,))
             mr = cursorRead.fetchone()
 
             if not mr:
                 conn.rollback()
                 return jsonify({"success": False, "error": f"Silo not found: {silo}"}), 400
 
+            # NOTE: the original query's VALUES clause was commented out
+            # entirely (# VALUES (?, ?, ?, ?, ?, ?, ?, ?)), so this insert
+            # never actually wrote a row. Restored and converted to %s.
             cursorWrite.execute("""
-                INSERT INTO recipeData (SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, Category, CoarseSpeed, FineSpeed)
-                # VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO "recipeData"
+                    ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed", "Category")
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 silo,
                 mr[0],                              # MaterialName from MaterialData
@@ -543,7 +565,7 @@ def update_row(index):
     # --------------------------------------------------------------
     # 1️⃣ Check if Silo exists in MaterialData
     # --------------------------------------------------------------
-    cursorRead.execute("SELECT MaterialName FROM MaterialData WHERE SiloNo = ?", (silo,))
+    cursorRead.execute('SELECT "MaterialName" FROM "MaterialData" WHERE "SiloNo" = %s', (silo,))
     mrow = cursorRead.fetchone()
 
     if not mrow:
@@ -555,7 +577,7 @@ def update_row(index):
     # --------------------------------------------------------------
     # 2️⃣ Check that Index exists in recipeData
     # --------------------------------------------------------------
-    cursorRead.execute('SELECT COUNT(*) FROM recipeData WHERE "Index"=?', (index,))
+    cursorRead.execute('SELECT COUNT(*) FROM "recipeData" WHERE "Index"=%s', (index,))
     if cursorRead.fetchone()[0] == 0:
         conn.close()
         return jsonify({"success": False, "error": "row_not_found"}), 404
@@ -564,10 +586,10 @@ def update_row(index):
     # 3️⃣ Duplicate Silo check (same recipe & category)
     # --------------------------------------------------------------
     cursorRead.execute("""
-        SELECT COUNT(*) FROM recipeData
-        WHERE SiloNo = ?
-          AND Category = ?
-          AND "Index" != ?
+        SELECT COUNT(*) FROM "recipeData"
+        WHERE "SiloNo" = %s
+          AND "Category" = %s
+          AND "Index" != %s
     """, (silo, category, index))
 
     if cursorRead.fetchone()[0] > 0:
@@ -579,16 +601,16 @@ def update_row(index):
     # --------------------------------------------------------------
     try:
         cursorWrite.execute("""
-            UPDATE recipeData
-            SET SiloNo = ?, 
-                Category = ?, 
-                MaterialName = ?, 
-                SetWeight = ?, 
-                FineWeight = ?, 
-                Tolerance = ?,
-                CoarseSpeed = ?,
-                FineSpeed = ?                        
-            WHERE "Index" = ?
+            UPDATE "recipeData"
+            SET "SiloNo" = %s, 
+                "Category" = %s, 
+                "MaterialName" = %s, 
+                "SetWeight" = %s, 
+                "FineWeight" = %s, 
+                "Tolerance" = %s,
+                "CoarseSpeed" = %s,
+                "FineSpeed" = %s                        
+            WHERE "Index" = %s
         """, (
             silo,
             category,
@@ -618,18 +640,25 @@ def delete_row(index):
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
     # STEP 1: Delete selected row
-    cursorWrite.execute('DELETE FROM recipeData WHERE "Index"=?', (index,))
+    cursorWrite.execute('DELETE FROM "recipeData" WHERE "Index"=%s', (index,))
     conn.commit()
 
     # STEP 2: Read all remaining rows ordered by old Index
-    cursorRead.execute('SELECT rowid FROM recipeData ORDER BY "Index" ASC')
+    # NOTE: SQLite's implicit "rowid" has no equivalent in Postgres.
+    # Postgres's closest analog is the system column "ctid" (physical
+    # row location), which is stable for the life of a transaction but
+    # can change after VACUUM/UPDATE elsewhere in the table. This works
+    # for the same single-writer reindex pattern the original code used,
+    # but if this table sees concurrent writes it would be worth adding
+    # a real serial primary key column instead of relying on ctid.
+    cursorRead.execute('SELECT ctid FROM "recipeData" ORDER BY "Index" ASC')
     rows = cursorRead.fetchall()
 
     # STEP 3: Reset index from 1...N
     new_index = 1
     for row in rows:
         cursorWrite.execute(
-            'UPDATE recipeData SET "Index"=? WHERE rowid=?',
+            'UPDATE "recipeData" SET "Index"=%s WHERE ctid=%s',
             (new_index, row[0])
         )
         new_index += 1
@@ -735,7 +764,7 @@ def get_column_settings():
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         cursorRead.execute(
-            "SELECT Info FROM Info_DB WHERE Particulars = 'ShowSpeedColumns'"
+            'SELECT "Info" FROM "Info_DB" WHERE "Particulars" = \'ShowSpeedColumns\''
         )
         row = cursorRead.fetchone()
         conn.close()
@@ -1211,18 +1240,18 @@ def save_column_settings():
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
         cursorRead.execute(
-            "SELECT COUNT(*) FROM Info_DB WHERE Particulars = 'ShowSpeedColumns'"
+            'SELECT COUNT(*) FROM "Info_DB" WHERE "Particulars" = \'ShowSpeedColumns\''
         )
         exists = cursorRead.fetchone()[0]
 
         if exists:
             cursorWrite.execute(
-                "UPDATE Info_DB SET Info = ? WHERE Particulars = 'ShowSpeedColumns'",
+                'UPDATE "Info_DB" SET "Info" = %s WHERE "Particulars" = \'ShowSpeedColumns\'',
                 ("1" if show else "0",)
             )
         else:
             cursorWrite.execute(
-                "INSERT INTO Info_DB (Particulars, Info) VALUES (?, ?)",
+                'INSERT INTO "Info_DB" ("Particulars", "Info") VALUES (%s, %s)',
                 ("ShowSpeedColumns", "1" if show else "0")
             )
 
@@ -1249,7 +1278,7 @@ def update_report():
         # 1️⃣ - Update report name
         if report_name and report_name.strip():
             cursorWrite.execute(
-                "UPDATE Info_DB SET Info = ? WHERE Particulars = 'Company_Name'",
+                'UPDATE "Info_DB" SET "Info" = %s WHERE "Particulars" = \'Company_Name\'',
                 (report_name,)
             )
             conn.commit()
@@ -1280,7 +1309,7 @@ def download_RecipeTag():
 
         # Read table into DataFrame
         df = pd.read_sql_query(
-            "SELECT * FROM RecipeTagName",  # Replace with your table name
+            'SELECT * FROM "RecipeTagName"',  # Replace with your table name
             conn
         )
 
@@ -1324,10 +1353,10 @@ def upload_RecipeTag():
         dfPlcExcel = pd.read_excel(file)
         print(dfPlcExcel)
 
-        # Insert into SQLite
+        # Insert into Postgres
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-        Sqlite.insert_data_into_sqlite_rec(
+        postgres.insert_data_into_sqlite_rec(
             cursorWrite,
             conn,
             dfPlcExcel
@@ -1402,7 +1431,7 @@ def model_excel():
 
 
     try:
-        query = "SELECT * FROM Data"
+        query = 'SELECT * FROM "Data"'
         df = pd.read_sql_query(query, conn)
 
         # Temporary file
@@ -1481,19 +1510,19 @@ def upload_plc_db():
 
             print("Node IDs:", node_ids)
 
-        # Insert into SQLite
-        Sqlite.insert_data_into_sqlite(
+        # Insert into Postgres
+        postgres.insert_data_into_sqlite(
             cursorWrite,
             conn,
             dfPlcExcel
         )
 
-        print("Data inserted into SQLite table successfully.")
+        print("Data inserted into database table successfully.")
 
         # Reload PLC data
         softwaretype = request.form.get("softwaretype", "")
 
-        dfPlcdb = Sqlite.dfPlc(
+        dfPlcdb = postgres.dfPlc(
             conn,
             softwaretype
         )
@@ -1543,8 +1572,8 @@ def get_stocks_data():
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
         query = """
-            SELECT SiloNo, MaterialName, MaterialCode, OperatorName, TotalExtracted
-            FROM MaterialData
+            SELECT "SiloNo", "MaterialName", "MaterialCode", "OperatorName", "TotalExtracted"
+            FROM "MaterialData"
         """
         df = pd.read_sql(query, conn)
 
@@ -1595,13 +1624,13 @@ def add_stock():
 
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-        cursorRead.execute("SELECT 1 FROM MaterialData WHERE SiloNo = ?", (silono,))
+        cursorRead.execute('SELECT 1 FROM "MaterialData" WHERE "SiloNo" = %s', (silono,))
         if cursorRead.fetchone():
             return jsonify({"success": False, "error": f"SiloNo {silono} already exists."})
 
         cursorWrite.execute("""
-            INSERT INTO MaterialData (SiloNo, MaterialName, MaterialCode, OperatorName)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO "MaterialData" ("SiloNo", "MaterialName", "MaterialCode", "OperatorName")
+            VALUES (%s, %s, %s, %s)
         """, (silono, data["MaterialName"], data["MaterialCode"], operator_name))
 
         conn.commit()
@@ -1622,14 +1651,14 @@ def update_stock(old_silono):
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
         if old_silono != new_silono:
-            cursorRead.execute("SELECT 1 FROM MaterialData WHERE SiloNo = ?", (new_silono,))
+            cursorRead.execute('SELECT 1 FROM "MaterialData" WHERE "SiloNo" = %s', (new_silono,))
             if cursorRead.fetchone():
                 return jsonify({"success": False, "error": f"SiloNo {new_silono} already exists."})
 
         cursorWrite.execute("""
-            UPDATE MaterialData
-            SET SiloNo = ?, MaterialName = ?, MaterialCode = ?, OperatorName = ?
-            WHERE SiloNo = ?
+            UPDATE "MaterialData"
+            SET "SiloNo" = %s, "MaterialName" = %s, "MaterialCode" = %s, "OperatorName" = %s
+            WHERE "SiloNo" = %s
         """, (new_silono, data["MaterialName"], data["MaterialCode"], operator_name, old_silono))
 
         conn.commit()
@@ -1643,7 +1672,7 @@ def update_stock(old_silono):
 def delete_stock(silono):
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
-        cursorWrite.execute("DELETE FROM MaterialData WHERE SiloNo = ?", (silono,))
+        cursorWrite.execute('DELETE FROM "MaterialData" WHERE "SiloNo" = %s', (silono,))
         conn.commit()
         return jsonify({"success": True})
     except Exception as e:
@@ -1662,8 +1691,8 @@ def export_material_data():
 
         # Read table into pandas
         query = """
-            SELECT SiloNo, MaterialName, MaterialCode, OperatorName, TotalExtracted
-            FROM MaterialData
+            SELECT "SiloNo", "MaterialName", "MaterialCode", "OperatorName", "TotalExtracted"
+            FROM "MaterialData"
         """
         df = pd.read_sql_query(query, conn)
 
@@ -1751,7 +1780,7 @@ def change_password():
 
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-    cursorRead.execute("SELECT password_hash FROM users WHERE username=?", (session['username'],))
+    cursorRead.execute("SELECT password_hash FROM users WHERE username=%s", (session['username'],))
     row = cursorRead.fetchone()
     if not row:
         return jsonify(success=False, error="User not found")
@@ -1760,7 +1789,7 @@ def change_password():
         return jsonify(success=False, error="Old password incorrect")
 
     new_hash = generate_password_hash(new_password)
-    cursorWrite.execute("UPDATE users SET password_hash=? WHERE username=?", (new_hash, session['username']))
+    cursorWrite.execute("UPDATE users SET password_hash=%s WHERE username=%s", (new_hash, session['username']))
     conn.commit()
     conn.close()
 
@@ -1781,7 +1810,7 @@ def update_user_password():
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
     hashed = generate_password_hash(new_password)
-    cursorWrite.execute("UPDATE users SET password_hash=? WHERE username=?", (hashed, username))
+    cursorWrite.execute("UPDATE users SET password_hash=%s WHERE username=%s", (hashed, username))
 
     conn.commit()
     conn.close()
@@ -1801,7 +1830,7 @@ def update_user_details():
 
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-    cursorWrite.execute("UPDATE users SET user_access=? WHERE username=?", (user_access, username))
+    cursorWrite.execute("UPDATE users SET user_access=%s WHERE username=%s", (user_access, username))
     conn.commit()
     conn.close()
 
@@ -1828,14 +1857,18 @@ def add_user():
     try:
         cursorWrite.execute("""
             INSERT INTO users (username, password_hash, role, is_active)
-            VALUES (?, ?, ?, 1)
+            VALUES (%s, %s, %s, 1)
         """, (username, hashed, role))
 
         conn.commit()
         conn.close()
         return jsonify(success=True)
 
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
+        # Was: except sqlite3.IntegrityError — psycopg2 raises its own
+        # IntegrityError (e.g. UniqueViolation) for constraint conflicts.
+        conn.rollback()
+        conn.close()
         return jsonify(success=False, error="User already exists")
 
 
@@ -1849,7 +1882,7 @@ def toggle_user_active():
 
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-    cursorWrite.execute("UPDATE users SET is_active=? WHERE id=?", (is_active, user_id))
+    cursorWrite.execute("UPDATE users SET is_active=%s WHERE id=%s", (is_active, user_id))
     conn.commit()
     conn.close()
 
@@ -1868,7 +1901,7 @@ def delete_user():
 
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-    cursorWrite.execute("DELETE FROM users WHERE username=?", (username,))
+    cursorWrite.execute("DELETE FROM users WHERE username=%s", (username,))
     conn.commit()
     conn.close()
 
@@ -1981,15 +2014,15 @@ def openXl():
 
         print(dfPlcExcel)
 
-        cursorRead, cursorWrite, engineConRead, engineConWriten, conn = Sqlite.sqlite()
+        cursorRead, cursorWrite, engineConRead, engineConWriten, conn = postgres.sqlite()
 
-        Sqlite.insert_data_into_sqlite_rec(
+        postgres.insert_data_into_sqlite_rec(
             cursorWrite,
             conn,
             dfPlcExcel
         )
 
-        print("Data inserted into SQLite table successfully.")
+        print("Data inserted into database table successfully.")
 
         return jsonify({
             "status": "success",

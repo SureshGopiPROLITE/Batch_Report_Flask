@@ -2,7 +2,7 @@ from http import server
 import pandas as pd
 import asyncio
 import logging
-from database import Sqlite
+from database import postgres
 from modules import main
 from config import sqliteCon
 from plc_connection import pylogix, snap7_plc
@@ -133,9 +133,17 @@ def monitor_loop(plc, dfPlcdb, server):
 
 def trigger_connect(server):
     try:
-        cursorRead, cursorWrite, engineConRead, engineConWriten, conn = Sqlite.sqlite()
+        cursorRead, cursorWrite, engineConRead, engineConWriten, conn = postgres.postgres()
         dfInfo = pd.read_sql_query('SELECT * FROM "Info_DB";', engineConRead)
         dfPlcdb = pd.read_sql_query('SELECT * FROM "Data";', engineConRead)
+        # NOTE: dfInfo.loc[0, ...] below relies on row 0 of "Info_DB" being
+        # the PLC connection info. SQLite tended to return rows in
+        # insertion order with a bare SELECT *, but Postgres makes NO such
+        # guarantee without an explicit ORDER BY — a later UPDATE, VACUUM,
+        # or the query planner could change row order silently. Worth
+        # switching this to `WHERE "Particulars" = '<key>'` instead of a
+        # positional lookup once you can confirm the exact key name used
+        # for this row.
         node = dfInfo.loc[0, "Info"]
         df_split(dfPlcdb)
 
@@ -278,16 +286,19 @@ def monitor_triggers(plc, dfPlcdb, server):
 def run_logging(plc, dfPlcdb, server):
     start_time = datetime.now()
 
-    # Only one thread can be inside this block at a time —
-    # this is what stops SQLite "database is locked" collisions.
+    # Only one thread can be inside this block at a time. This isn't
+    # about SQLite file-locking anymore (Postgres handles concurrent
+    # writers itself) — it's here so two threads can't both read the
+    # current MAX("BatchNo") before either has inserted, which would
+    # hand out the same new_batch_no to two batches at once.
     with db_write_lock:
         try:
           
             
             dfPlcdb = dfPlcdb.reset_index(drop=True)
 
-            # ---------------- SQLite / DB Setup ----------------
-            cursorRead, cursorWrite, engineConRead, engineConWrite, conn = Sqlite.sqlite()
+            # ---------------- Postgres / DB Setup ----------------
+            cursorRead, cursorWrite, engineConRead, engineConWrite, conn = postgres.postgres()
 
             dfInfo = pd.read_sql_query('SELECT * FROM "Info_DB";', engineConRead)
             print(dfInfo)
@@ -298,6 +309,9 @@ def run_logging(plc, dfPlcdb, server):
             
 
             # ---------------- Daily Batch Logic ----------------
+            # Same positional-row caveat as trigger_connect() above:
+            # dfInfo.loc[7]/[8] assume a fixed row order in "Info_DB"
+            # that Postgres doesn't guarantee without an ORDER BY.
             try:
                 last_date = str(dfInfo.loc[7, "Info"])
                 daily_batch_no = int(dfInfo.loc[8, "Info"])
@@ -313,12 +327,15 @@ def run_logging(plc, dfPlcdb, server):
                 daily_batch_no = 1
                 last_date = current_date
 
+            # "Info_DB", "Info" and "Particulars" are mixed-case
+            # identifiers, so they need to be double-quoted or Postgres
+            # will fold them to lowercase and fail to find them.
             cursorWrite.execute(
-                'UPDATE Info_DB SET Info = ? WHERE Particulars = ?',
+                'UPDATE "Info_DB" SET "Info" = %s WHERE "Particulars" = %s',
                 (daily_batch_no, "Batch_no")
             )
             cursorWrite.execute(
-                'UPDATE Info_DB SET Info = ? WHERE Particulars = ?',
+                'UPDATE "Info_DB" SET "Info" = %s WHERE "Particulars" = %s',
                 (last_date, "Last_Date")
             )
             conn.commit()
@@ -360,7 +377,7 @@ def run_logging(plc, dfPlcdb, server):
             if not category_value.empty:
                 dfPlcdb = dfPlcdb[~dfPlcdb['Category'].isin(category_value)]
 
-            dfPlcdb = Sqlite.calculate_silo_diff(dfPlcdb)
+            dfPlcdb = postgres.calculate_silo_diff(dfPlcdb)
             print(dfPlcdb)
             
             
@@ -377,7 +394,7 @@ def run_logging(plc, dfPlcdb, server):
                 '''
                 INSERT INTO plc_data
                 ("TimeStamp","Name","DataType","Value","Category","BatchNo","DailyBatchNo")
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ''',
                 values
             )
@@ -401,8 +418,8 @@ def run_logging(plc, dfPlcdb, server):
                 errors="coerce"
             )
 
-            Sqlite.insertBatch(dfPlcdb)
-            Sqlite.insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn)
+            postgres.insertBatch(dfPlcdb)
+            postgres.insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn)
 
             # ---------------- Logging Duration ----------------
             duration = datetime.now() - start_time
@@ -426,4 +443,3 @@ def run_logging(plc, dfPlcdb, server):
                     c.close()
                 except Exception:
                     pass
-

@@ -10,7 +10,6 @@ import time
 from flask import session
 import psycopg2
 from psycopg2 import sql
-import sqlite3
 import pandas as pd
 from modules.batch_summary import calculate_batch_summary
 
@@ -85,13 +84,8 @@ def plc_data_process(batch_no):
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
-        # Query database for plc_data of selected BatchNo
-        query = f"""
-            SELECT *
-            FROM plc_data
-            WHERE BatchNo == '{batch_no}'
-        """
-        df = pd.read_sql_query(query, engineConRead)
+        query = 'SELECT * FROM plc_data WHERE "BatchNo" = %s'
+        df = pd.read_sql_query(query, engineConRead, params=(batch_no,))
         
 
         if df.empty:
@@ -114,12 +108,9 @@ def plc_data_process(batch_no):
         df_pivot["Difference"] = df_pivot.apply(lambda row: Report.difference(row["SetWeight"], row["ActualWeight"]), axis=1)
 
         # Retrieve DailyBatchNo
-        query_daily_batch = f"""
-            SELECT DISTINCT DailyBatchNo
-            FROM plc_data
-            WHERE BatchNo == '{batch_no}'
-        """
-        df_daily_batch = pd.read_sql_query(query_daily_batch, engineConRead)
+        # Same fixes as above: quoted identifiers + parameterized value.
+        query_daily_batch = 'SELECT DISTINCT "DailyBatchNo" FROM plc_data WHERE "BatchNo" = %s'
+        df_daily_batch = pd.read_sql_query(query_daily_batch, engineConRead, params=(batch_no,))
         # print(df_daily_batch)
         # Ensure DailyBatchNo exists and is assigned
         if not df_daily_batch.empty:
@@ -148,8 +139,10 @@ def report_data_process(batch_no):
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
 
-        query = f"SELECT * FROM plc_data WHERE BatchNo = '{batch_no}'"
-        df = pd.read_sql_query(query, engineConRead)
+        # "BatchNo" quoted + parameterized (was an unquoted, f-string
+        # interpolated query).
+        query = 'SELECT * FROM plc_data WHERE "BatchNo" = %s'
+        df = pd.read_sql_query(query, engineConRead, params=(batch_no,))
 
         if df.empty:
             return pd.DataFrame(), pd.DataFrame(), None
@@ -181,8 +174,9 @@ def report_data_process(batch_no):
 
         df_pivot["Difference"] = df_pivot.apply(lambda r: Report.difference(r["SetWeight"], r["ActualWeight"]), axis=1)
 
-        query_daily = f"SELECT DISTINCT DailyBatchNo FROM plc_data WHERE BatchNo = '{batch_no}'"
-        df_daily = pd.read_sql_query(query_daily, engineConRead)
+        # Same fixes: quoted "BatchNo"/"DailyBatchNo" + parameterized value.
+        query_daily = 'SELECT DISTINCT "DailyBatchNo" FROM plc_data WHERE "BatchNo" = %s'
+        df_daily = pd.read_sql_query(query_daily, engineConRead, params=(batch_no,))
         daily_batch_no = df_daily.iloc[0]['DailyBatchNo'] if not df_daily.empty else None
 
         # Define displayed columns (excluding "State")
@@ -198,7 +192,7 @@ def report_data_process(batch_no):
 
 def dashboard_calculations(start_timestamp, end_timestamp, hours):
     try:
-        print("Dashboard calculations called")
+        
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
       
@@ -255,12 +249,8 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
         print(f" Time difference in hours: {time_diff_hours}")
 
         # --------------------- PLC DATA ---------------------
-        query_plc = f"""
-            SELECT *
-            FROM plc_data
-            WHERE TimeStamp BETWEEN '{start_dt}' AND '{end_dt}'
-        """
-        df_plc = pd.read_sql_query(query_plc, engineConRead)
+        query_plc = 'SELECT * FROM plc_data WHERE "TimeStamp" BETWEEN %s AND %s'
+        df_plc = pd.read_sql_query(query_plc, engineConRead, params=(start_dt, end_dt))
 
         if df_plc.empty:
             print("No PLC data found in range")
@@ -274,12 +264,9 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
             }
 
         # --------------------- BATCH LOGS ---------------------
-        query_batches = f"""
-            SELECT *
-            FROM Batches
-            WHERE TimeStamp BETWEEN '{start_dt}' AND '{end_dt}'
-        """
-        df_batches = pd.read_sql_query(query_batches, engineConRead)
+      
+        query_batches = 'SELECT * FROM "Batches" WHERE "TimeStamp" BETWEEN %s AND %s'
+        df_batches = pd.read_sql_query(query_batches, engineConRead, params=(start_dt, end_dt))
 
         df_ttl_tons = sqliteCon.show_data(conn, hours, str(start_dt), str(end_dt), engineConRead)
 
@@ -316,7 +303,8 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
 
 
         # Full table for calendar chart
-        query_calander = "SELECT * FROM Batches"
+        # "Batches" is mixed-case and must be quoted.
+        query_calander = 'SELECT * FROM "Batches"'
         df_calander = pd.read_sql_query(query_calander, engineConRead)
 
         if df_batches.empty:
@@ -373,8 +361,10 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
 
         # ---------------------- SUMMARY -----------------------
         
+        
         df_prod = df_plc[df_plc["Name"] == "TotalBatchActualWeight"]
-        total_production_tons = round(df_prod["Value"].sum() / 1000.0, 2) if not df_prod.empty else 0.0
+        prod_values = pd.to_numeric(df_prod["Value"], errors="coerce")
+        total_production_tons = round(prod_values.sum() / 1000.0, 2) if not df_prod.empty else 0.0
 
         number_of_batches = int(df_batches["BatchNo"].nunique()) if "BatchNo" in df_batches.columns else 0
 
@@ -454,10 +444,3 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
     except Exception as e:
         print("Error:", e)
         return {"status": "error", "message": str(e)}
-
-
-
-
-
-
-
