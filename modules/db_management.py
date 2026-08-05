@@ -155,7 +155,6 @@ def _build_filtered_backup(dest_path, row_filter_for_column):
         src_cur = cursorRead
         dest_cur = dest_conn.cursor()
 
-   
         table_names = _get_postgres_tables(src_cur)
 
         # 1. Recreate schema in the SQLite destination
@@ -209,7 +208,23 @@ def _build_filtered_backup(dest_path, row_filter_for_column):
 # --------------------------------------------------------
 
 def create_custom_range_backup(from_date, to_date):
+    """
+    Builds a backup containing only rows between from_date and to_date
+    (inclusive) for time-series tables (Batches, plc_data). Other tables
+    (recipes, users, MaterialData, etc.) are copied in full, same as
+    Monthly/Yearly, so the resulting file is still a complete, standalone
+    database.
 
+    from_date, to_date: strings in 'YYYY-MM-DD' format (e.g. from an
+    HTML <input type="date">). The upper bound is automatically
+    extended to the end of that day (23:59:59.999), so picking the
+    same day for both from_date and to_date captures that entire day.
+
+    Each call creates a NEW file (does not overwrite), since custom
+    ranges are one-off exports rather than a recurring per-period slot.
+
+    Returns (custom_path, custom_name).
+    """
     try:
         from_dt = datetime.strptime(from_date, "%Y-%m-%d")
         to_dt = datetime.strptime(to_date, "%Y-%m-%d")
@@ -248,7 +263,13 @@ def create_custom_range_backup(from_date, to_date):
 # --------------------------------------------------------
 
 def create_full_backup():
-
+    """
+    Was: shutil.copy2(DB_PATH, full_path) — a raw file copy, which only
+    works when the source database IS a file. Now rebuilds a fresh
+    SQLite snapshot straight from the live Postgres data, reusing the
+    same schema-copy machinery as create_custom_range_backup() with an
+    always-true filter so every row in every table is included.
+    """
     now = datetime.now()
     full_name = "Full_Backup_PLCDB2.db"
     full_path = os.path.join(CUSTOM_BACKUP_FOLDER, full_name)

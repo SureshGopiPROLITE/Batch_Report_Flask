@@ -121,10 +121,7 @@
             <div class="chart-box">
                 <div style="display: flex; justify-content: space-between; margin-right: 0.5rem;">
                     <h3 class="chart-title">Production Calendar</h3>
-                    <select id="yearSelect" class="year-select">
-                        <option value="2026">2026</option>
-                        <option value="2025">2025</option>        
-                    </select>
+                    <select id="yearSelect" class="year-select"></select>
                 </div>
                 <div id="calendarChart" class="calendar-chart"></div>
             </div>
@@ -639,6 +636,57 @@ function drawCalendarChart(data) {
     });
 }
 
+/* =========================
+      LOAD AVAILABLE YEARS
+========================= */
+
+function loadAvailableYears(selectedYear = null) {
+
+    fetch("/calendar_years")   // <-- Match Flask route
+        .then(res => res.json())
+        .then(years => {
+
+            const yearSelect = document.getElementById("yearSelect");
+            yearSelect.innerHTML = "";
+
+            if (!years || years.length === 0) {
+
+                const currentYear = new Date().getFullYear();
+
+                const option = document.createElement("option");
+                option.value = currentYear;
+                option.textContent = currentYear;
+
+                yearSelect.appendChild(option);
+
+                loadCalendar(currentYear);
+                return;
+            }
+
+            years.forEach(year => {
+
+                const option = document.createElement("option");
+                option.value = year;
+                option.textContent = year;
+
+                yearSelect.appendChild(option);
+
+            });
+
+            if (selectedYear && years.includes(Number(selectedYear))) {
+                yearSelect.value = selectedYear;
+            } else {
+                yearSelect.value = years[0];   // Latest year
+            }
+
+            loadCalendar(yearSelect.value);
+
+        })
+        .catch(err => {
+            console.error("Failed to load years:", err);
+        });
+
+}
 
 /* =========================
    SYNC YEAR WITH DATE
@@ -646,29 +694,18 @@ function drawCalendarChart(data) {
 
 function syncCalendarYear() {
 
-    const fromDate = document.getElementById("fromDate").value;
+    const from = document.getElementById("fromDate").value;
 
-    if (!fromDate) return;
-
-    const year = fromDate.substring(0, 4);
-
-    const yearSelect = document.getElementById("yearSelect");
-
-    // Add year automatically if missing
-    if (![...yearSelect.options].some(o => o.value === year)) {
-
-        const option = document.createElement("option");
-        option.value = year;
-        option.textContent = year;
-
-        yearSelect.appendChild(option);
+    if (!from) {
+        loadAvailableYears();
+        return;
     }
 
-    yearSelect.value = year;
+    const year = from.substring(0, 4);
 
-    loadCalendar(year);
+    loadAvailableYears(year);
+
 }
-
 
 /* =========================
     LOAD CALENDAR DATA
@@ -694,27 +731,21 @@ function loadCalendar(year) {
 
 }
 
-
 /* =========================
       YEAR DROPDOWN
 ========================= */
 
 document.addEventListener("DOMContentLoaded", function () {
 
-    const yearSelect = document.getElementById("yearSelect");
-
-    // Automatically use year from From Date
     syncCalendarYear();
 
-    // Manual year selection
-    yearSelect.addEventListener("change", function () {
+    document.getElementById("yearSelect").addEventListener("change", function () {
 
         loadCalendar(this.value);
 
     });
 
 });
-
 
 /* =========================
     DATE CHANGE EVENTS

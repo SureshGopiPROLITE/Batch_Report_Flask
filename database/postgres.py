@@ -8,27 +8,36 @@ import pandas as pd
 from datetime import datetime, timedelta
 # from database import postgres
 
+import os
+
 # ---------------------------------------------------------------------------
 # Connection settings
 # ---------------------------------------------------------------------------
-DB_HOST = "localhost"
-DB_PORT = "5434"
-DB_NAME = "PLCDB2"
-DB_USER = "postgres"
-DB_PASSWORD = "12345678"
+DB_HOST = os.environ.get("DB_HOST", "postgres")
+DB_PORT = os.environ.get("DB_PORT", "5432")
+DB_NAME = os.environ.get("DB_NAME", "PLCDB2")
+DB_USER = os.environ.get("DB_USER", "postgres")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "12345678")
 
 ENGINE_URL = (
     f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}"
     f"@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
 
+# ---------------------------------------------------------------------------
+# FIX: create ONE engine (and its own small pool) for the whole process,
+# ---------------------------------------------------------------------------
+engine = create_engine(
+    ENGINE_URL,
+    pool_size=5,
+    max_overflow=2,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+)
+
 
 def postgres():  # Keep same name so the rest of the project works unchanged
-    """
-    Returns the same 5-tuple the rest of the codebase expects:
-    (cursorRead, cursorWrite, engineConRead, engineConWrite, conn)
-    but backed by Postgres instead of postgres.
-    """
+
     conn = psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -38,17 +47,24 @@ def postgres():  # Keep same name so the rest of the project works unchanged
     )
     cursorRead = conn.cursor()
     cursorWrite = conn.cursor()
-    engine = create_engine(ENGINE_URL)
     engineConRead = engine.connect()
     engineConWrite = engine.connect()
     return cursorRead, cursorWrite, engineConRead, engineConWrite, conn
 
 
+def close_postgres(cursorRead, cursorWrite, engineConRead, engineConWrite, conn):
+ 
+    for obj in (cursorRead, cursorWrite, engineConRead, engineConWrite, conn):
+        if obj is None:
+            continue
+        try:
+            obj.close()
+        except Exception as e:
+            print(f"Warning: error closing {obj!r}: {e}")
+
+
 def calculate_silo_diff(dfPlcdb: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calculate absolute difference (kg) and percentage between SetWeight and ActualWeight for each Silo.
-    Returns dfPlcdb with new rows added. (Pure pandas - no SQL dialect changes needed.)
-    """
+
     results = [
         {
             "Timestamp": group["Timestamp"].iloc[0],
@@ -74,12 +90,6 @@ def calculate_silo_diff(dfPlcdb: pd.DataFrame) -> pd.DataFrame:
 
 
 def backup_database():
-    """
-    postgres backups were a plain file copy. Postgres has no single db file to
-    copy, so this now shells out to pg_dump (must be installed and on PATH)
-    and writes a .dump (custom-format) file that can be restored with
-    pg_restore. The save-file dialog UX is kept the same as before.
-    """
     try:
         # Hide the root window
         root = Tk()
@@ -95,13 +105,10 @@ def backup_database():
             print("No backup destination selected.")
             return
 
-        # Ensure the backup path directory exists, create if it does not
         backup_dir = os.path.dirname(backup_path)
         if backup_dir and not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
 
-        # Run pg_dump, passing the password via the environment (avoids
-        # putting it on the command line / in shell history)
         env = os.environ.copy()
         env["PGPASSWORD"] = DB_PASSWORD
 
@@ -110,7 +117,7 @@ def backup_database():
             "-h", DB_HOST,
             "-p", DB_PORT,
             "-U", DB_USER,
-            "-F", "c",              # custom format, restore with pg_restore
+            "-F", "c",
             "-f", backup_path,
             DB_NAME,
         ]
@@ -245,11 +252,7 @@ def showBatch(conn, hours, from_time, to_time, engineConRead):
 
 
 def insert_data_into_sqlite(cursor, conn, dfPlcExcel):
-    """
-    Name kept as insert_data_into_sqlite so callers don't need to change.
-    Table/column identifiers are double-quoted since Postgres lowercases
-    unquoted identifiers and this schema relies on mixed-case names.
-    """
+
     try:
         # Drop the table if it exists
         drop_table_query = 'DROP TABLE IF EXISTS "Data"'
@@ -323,39 +326,44 @@ def insertBatch(df):
     # Establish database connection
     cursorRead, cursorWrite, engineConRead, engineConWriten, conn = postgres()
 
-    # Separate Info category from other data
-    df_string, df = df[df["Category"] == "Info"], df[df["Category"] != "Info"]
-    df_string = df_string.reset_index()
+    # FIX: wrap everything in try/finally so the connections opened by
+    # postgres() are always released, even if something below raises.
+    try:
+        # Separate Info category from other data
+        df_string, df = df[df["Category"] == "Info"], df[df["Category"] != "Info"]
+        df_string = df_string.reset_index()
 
-    # Pivot df_string
-    df_pivot_1 = df_string.pivot(index='BatchNo', columns='Name', values='Value')
-    df_pivot_1['TimeStamp'] = df_string.drop_duplicates(subset='BatchNo').set_index('BatchNo')['Timestamp']
-    df_pivot_1 = df_pivot_1.reset_index()
+        # Pivot df_string
+        df_pivot_1 = df_string.pivot(index='BatchNo', columns='Name', values='Value')
+        df_pivot_1['TimeStamp'] = df_string.drop_duplicates(subset='BatchNo').set_index('BatchNo')['Timestamp']
+        df_pivot_1 = df_pivot_1.reset_index()
 
-    # Reorder columns (ensure these column names exist in your dataframe)
-    column_order = ["BatchNo", "TimeStamp", "Plant Name", "Recipe Name", "Start Date Time", "End Date Time"]
-    df_pivot_1 = df_pivot_1[column_order]
+        # Reorder columns (ensure these column names exist in your dataframe)
+        column_order = ["BatchNo", "TimeStamp", "Plant Name", "Recipe Name", "Start Date Time", "End Date Time"]
+        df_pivot_1 = df_pivot_1[column_order]
 
-    # Extract Total Batch Weight from df
-    df_weight = df[df["Name"] == "ActualWeight"]
-    df_weight = df_weight.groupby("BatchNo")["Value"].sum().reset_index()
+        # Extract Total Batch Weight from df
+        df_weight = df[df["Name"] == "ActualWeight"]
+        df_weight = df_weight.groupby("BatchNo")["Value"].sum().reset_index()
 
-    # Round to 2 decimal places
-    df_weight["Value"] = pd.to_numeric(
-        df_weight["Value"],
-        errors="coerce"
-    )
+        # Round to 2 decimal places
+        df_weight["Value"] = pd.to_numeric(
+            df_weight["Value"],
+            errors="coerce"
+        )
 
-    df_weight["Value"] = df_weight["Value"].round(2)
+        df_weight["Value"] = df_weight["Value"].round(2)
 
-    df_weight.rename(columns={"Value": "Total Batch Weight"}, inplace=True)
+        df_weight.rename(columns={"Value": "Total Batch Weight"}, inplace=True)
 
-    # Merge with df_pivot_1
-    df_pivot_1 = df_pivot_1.merge(df_weight, on="BatchNo", how="left")
+        # Merge with df_pivot_1
+        df_pivot_1 = df_pivot_1.merge(df_weight, on="BatchNo", how="left")
 
-    # Insert df_pivot_1 into the Batches table
-    # (to_sql via SQLAlchemy quotes mixed-case identifiers automatically)
-    df_pivot_1.to_sql("Batches", con=engineConWriten, if_exists="append", index=False)
+        # Insert df_pivot_1 into the Batches table
+        # (to_sql via SQLAlchemy quotes mixed-case identifiers automatically)
+        df_pivot_1.to_sql("Batches", con=engineConWriten, if_exists="append", index=False)
+    finally:
+        close_postgres(cursorRead, cursorWrite, engineConRead, engineConWriten, conn)
 
 
 # recipe tag inc

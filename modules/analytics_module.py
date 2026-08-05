@@ -12,12 +12,14 @@ from sqlalchemy import create_engine
 # === Postgres connection settings ===
 # Override these via environment variables in production, e.g.:
 #   export PG_HOST=localhost PG_PORT=5432 PG_DB=plcdb PG_USER=postgres PG_PASSWORD=yourpassword
+import os
+
 PG_CONFIG = {
-    "host": os.environ.get("PG_HOST", "localhost"),
-    "port": os.environ.get("PG_PORT", "5434"),
-    "dbname": os.environ.get("PG_DB", "PLCDB2"),
-    "user": os.environ.get("PG_USER", "postgres"),
-    "password": os.environ.get("PG_PASSWORD", "12345678"),
+    "host": os.environ.get("DB_HOST", "postgres"),
+    "port": os.environ.get("DB_PORT", "5432"),
+    "dbname": os.environ.get("DB_NAME", "PLCDB2"),
+    "user": os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASSWORD", "12345678"),
 }
 
 
@@ -69,11 +71,7 @@ def get_cleaned_data():
     conn, cursorRead, cursorWrite = get_db_connection()
     engine, engineConRead, engineConWrite = get_db_connection_engine()
 
-    # NOTE: if your table/column names in Postgres are lowercase (Postgres
-    # folds unquoted identifiers to lowercase by default), make sure the
-    # actual table is named plc_data (lowercase) — this matches Postgres'
-    # default folding behavior. If you migrated the schema with mixed-case
-    # names preserved (via quoted identifiers), use "plc_data" in quotes here.
+
     df = pd.read_sql("SELECT * FROM plc_data", engineConRead)
     print("🔹 Raw data loaded:", df.shape)
 

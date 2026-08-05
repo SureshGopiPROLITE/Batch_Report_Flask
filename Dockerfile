@@ -1,8 +1,10 @@
+# Base Image
 FROM python:3.12-slim-bookworm
 
+# Working directory
 WORKDIR /app
 
-# Install system libraries required for WeasyPrint and timezone
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     tzdata \
     python3-tk \
@@ -29,21 +31,21 @@ RUN apt-get update && apt-get install -y \
     xz-utils \
     && ln -sf /usr/share/zoneinfo/Asia/Kolkata /etc/localtime \
     && echo "Asia/Kolkata" > /etc/timezone \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Set container timezone to IST
 ENV TZ=Asia/Kolkata
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
 COPY . .
 
-# Expose Flask and Dash ports
 EXPOSE 5000
 EXPOSE 8050
 
-# Run with single worker
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--timeout", "120"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "1", "--timeout", "120"]

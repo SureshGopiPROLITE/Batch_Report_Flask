@@ -132,18 +132,23 @@ def monitor_loop(plc, dfPlcdb, server):
 
 
 def trigger_connect(server):
+    # FIX: this function used to open a postgres() connection set here
+    # and hang onto it for the rest of the function (and effectively for
+    # the entire monitoring session, since monitor_loop below blocks for
+    # as long as monitoring runs). engineConRead/engineConWrite/conn/
+    # cursorRead/cursorWrite are only actually needed for the two reads
+    # right below - close them immediately after, inside try/finally, so
+    # a restart of monitoring (stop_monitoring -> start_monitoring) can't
+    # accumulate leaked connections session after session.
+    cursorRead = cursorWrite = engineConRead = engineConWriten = conn = None
     try:
         cursorRead, cursorWrite, engineConRead, engineConWriten, conn = postgres.postgres()
-        dfInfo = pd.read_sql_query('SELECT * FROM "Info_DB";', engineConRead)
+        dfInfo = pd.read_sql_query('SELECT * FROM "Info_db";', engineConRead)
         dfPlcdb = pd.read_sql_query('SELECT * FROM "Data";', engineConRead)
-        # NOTE: dfInfo.loc[0, ...] below relies on row 0 of "Info_DB" being
-        # the PLC connection info. SQLite tended to return rows in
-        # insertion order with a bare SELECT *, but Postgres makes NO such
-        # guarantee without an explicit ORDER BY — a later UPDATE, VACUUM,
-        # or the query planner could change row order silently. Worth
-        # switching this to `WHERE "Particulars" = '<key>'` instead of a
-        # positional lookup once you can confirm the exact key name used
-        # for this row.
+    finally:
+        postgres.close_postgres(cursorRead, cursorWrite, engineConRead, engineConWriten, conn)
+
+    try:
         node = dfInfo.loc[0, "Info"]
         df_split(dfPlcdb)
 
@@ -285,13 +290,8 @@ def monitor_triggers(plc, dfPlcdb, server):
 
 def run_logging(plc, dfPlcdb, server):
     start_time = datetime.now()
-
-    # Only one thread can be inside this block at a time. This isn't
-    # about SQLite file-locking anymore (Postgres handles concurrent
-    # writers itself) — it's here so two threads can't both read the
-    # current MAX("BatchNo") before either has inserted, which would
-    # hand out the same new_batch_no to two batches at once.
     with db_write_lock:
+        cursorRead = cursorWrite = engineConRead = engineConWrite = conn = None
         try:
           
             
@@ -300,7 +300,7 @@ def run_logging(plc, dfPlcdb, server):
             # ---------------- Postgres / DB Setup ----------------
             cursorRead, cursorWrite, engineConRead, engineConWrite, conn = postgres.postgres()
 
-            dfInfo = pd.read_sql_query('SELECT * FROM "Info_DB";', engineConRead)
+            dfInfo = pd.read_sql_query('SELECT * FROM "Info_db";', engineConRead)
             print(dfInfo)
 
             cursorWrite.execute('SELECT COALESCE(MAX("BatchNo"), 0) FROM plc_data')
@@ -309,9 +309,7 @@ def run_logging(plc, dfPlcdb, server):
             
 
             # ---------------- Daily Batch Logic ----------------
-            # Same positional-row caveat as trigger_connect() above:
-            # dfInfo.loc[7]/[8] assume a fixed row order in "Info_DB"
-            # that Postgres doesn't guarantee without an ORDER BY.
+            
             try:
                 last_date = str(dfInfo.loc[7, "Info"])
                 daily_batch_no = int(dfInfo.loc[8, "Info"])
@@ -327,15 +325,13 @@ def run_logging(plc, dfPlcdb, server):
                 daily_batch_no = 1
                 last_date = current_date
 
-            # "Info_DB", "Info" and "Particulars" are mixed-case
-            # identifiers, so they need to be double-quoted or Postgres
-            # will fold them to lowercase and fail to find them.
+           
             cursorWrite.execute(
-                'UPDATE "Info_DB" SET "Info" = %s WHERE "Particulars" = %s',
+                'UPDATE "Info_db" SET "Info" = %s WHERE "Particulars" = %s',
                 (daily_batch_no, "Batch_no")
             )
             cursorWrite.execute(
-                'UPDATE "Info_DB" SET "Info" = %s WHERE "Particulars" = %s',
+                'UPDATE "Info_db" SET "Info" = %s WHERE "Particulars" = %s',
                 (last_date, "Last_Date")
             )
             conn.commit()
@@ -392,7 +388,7 @@ def run_logging(plc, dfPlcdb, server):
            
             cursorWrite.executemany(
                 '''
-                INSERT INTO plc_data
+                INSERT INTO "plc_data"
                 ("TimeStamp","Name","DataType","Value","Category","BatchNo","DailyBatchNo")
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ''',
@@ -438,8 +434,4 @@ def run_logging(plc, dfPlcdb, server):
             return None
 
         finally:
-            for c in (cursorRead, cursorWrite, conn):
-                try:
-                    c.close()
-                except Exception:
-                    pass
+            postgres.close_postgres(cursorRead, cursorWrite, engineConRead, engineConWrite, conn)

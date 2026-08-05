@@ -164,7 +164,7 @@ def read_bulk_plc_data(plc, dfPlcdb):
     dfPlcdb["Value"] = None
 
     if not plc.get_connected():
-        print("⚠️ PLC not connected!")
+        print(" PLC not connected!")
         return dfPlcdb
 
     for db_number in dfPlcdb["db_number"].unique():
@@ -177,7 +177,7 @@ def read_bulk_plc_data(plc, dfPlcdb):
         try:
             raw_data = plc.db_read(int(db_number), start_offset, size)
         except Exception as e:
-            print(f"❌ Failed to read DB{db_number}: {e}")
+            print(f" Failed to read DB{db_number}: {e}")
             continue
 
         # Decode each tag from the buffer
@@ -224,7 +224,7 @@ def read_bulk_plc_data(plc, dfPlcdb):
                     dfPlcdb.at[idx, "Value"] = None
 
             except Exception as e:
-                print(f"⚠️ Decode error DB{db_number} offset {row['start_offset']}: {e}")
+                print(f" Decode error DB{db_number} offset {row['start_offset']}: {e}")
                 dfPlcdb.at[idx, "Value"] = None
 
     return dfPlcdb
@@ -235,7 +235,7 @@ def read_bulk_plc_data(plc, dfPlcdb):
 # -------------------- Bulk Write --------------------
 def write_bulk_plc_data(plc, dfPlcdb):
 
-    print("⚡ Bulk PLC write started...")
+    print(" Bulk PLC write started...")
 
     if not plc.get_connected():
         return {

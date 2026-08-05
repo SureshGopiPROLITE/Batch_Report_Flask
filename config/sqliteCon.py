@@ -35,10 +35,10 @@ def get_db_connection_engine():
         engine = create_engine(db_url)
         engineConRead = engine.connect()
         engineConWrite = engine.connect()
-        print("✅ Postgres SQLAlchemy engine created successfully.")
+        print(" Postgres SQLAlchemy engine created successfully.")
         return engine, engineConRead, engineConWrite
     except Exception as e:
-        print(f"❌ Failed to create SQLAlchemy engine: {e}")
+        print(f" Failed to create SQLAlchemy engine: {e}")
         return None, None, None
 
 
@@ -192,10 +192,10 @@ def insertBatch(df):
             method='multi'
         )
 
-        print("✅ Batch metadata inserted successfully.")
+        print(" Batch metadata inserted successfully.")
 
     except Exception as e:
-        print(f"❌ Error during batch insertion: {e}")
+        print(f" Error during batch insertion: {e}")
 
     finally:
         print("Batch insertion completed.")
@@ -316,8 +316,6 @@ def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
 
         # ---------------------------------------------------------
         # Read existing Postgres data
-        # (quoted identifiers: MaterialData table uses mixed-case
-        # column names, which Postgres requires double-quoting for)
         # ---------------------------------------------------------
         existing_data = pd.read_sql(
             '''
@@ -396,25 +394,18 @@ def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
         conn.commit()
 
         print(
-            "✅ TotalWeight values successfully updated "
+            " TotalWeight values successfully updated "
             "in MaterialData."
         )
 
     except Exception as e:
         import traceback
-        print("❌ Error occurred:", e)
+        print(" Error occurred:", e)
         traceback.print_exc()
 
 
 def data_batch(conn, hours, from_time, to_time, engineConRead):
-    """
-    Was built with raw f-string interpolated SQL and unquoted table/
-    column names, both of which are risky and Postgres-incompatible:
-      - "Batches"/"TimeStamp" are mixed-case identifiers -> need quoting
-      - values are now passed as bound %s parameters instead of being
-        interpolated directly into the SQL string (safer, and avoids
-        subtle formatting bugs with timestamps containing quotes).
-    """
+
     try:
         if hours == "Custom":
             print("Time:", from_time, to_time)
@@ -423,7 +414,7 @@ def data_batch(conn, hours, from_time, to_time, engineConRead):
                 from_time_dt = datetime.fromisoformat(from_time)
                 to_time_dt = datetime.fromisoformat(to_time)
             except Exception:
-                print("⚠️ Invalid datetime format, received:", from_time, to_time)
+                print(" Invalid datetime format, received:", from_time, to_time)
                 return None
 
             query = """
@@ -444,7 +435,7 @@ def data_batch(conn, hours, from_time, to_time, engineConRead):
             """
             params = (from_time_dt,)
         else:
-            print("⚠️ Invalid hours option:", hours)
+            print(" Invalid hours option:", hours)
             return None
 
         
@@ -452,23 +443,20 @@ def data_batch(conn, hours, from_time, to_time, engineConRead):
         df = pd.read_sql_query(query, con=engineConRead, params=params)
 
         if df.empty:
-            print("ℹ️ No data returned for given filters.")
+            print(" No data returned for given filters.")
             return None
 
         df = df.drop_duplicates(subset=["BatchNo"], keep="first")
-        print(f"✅ Retrieved {len(df)} records.")
+        print(f" Retrieved {len(df)} records.")
         return df
 
     except Exception as e:
-        print(f"❌ Error in data_batch: {e}")
+        print(f" Error in data_batch: {e}")
         return None
 
 
 def get_silo_pivot(df: pd.DataFrame, silo: str) -> pd.DataFrame:
-    """
-    Filter and pivot silo data per timestamp (minute-level) for a given silo.
-    Pure pandas — no DB access, so no Postgres-specific changes needed here.
-    """
+ 
     # Step 1: Filter by silo and remove unwanted rows
     df_filtered = df[df["Category"] == silo].copy()
     df_filtered = df_filtered[~((df_filtered["Category"] == "Info") | (df_filtered["DataType"] == "STRING"))]
@@ -524,15 +512,7 @@ def get_silo_pivot(df: pd.DataFrame, silo: str) -> pd.DataFrame:
 
 
 def show_data(conn, hours, from_time, to_time, engineConRead):
-    """
-    Was built with raw f-string interpolated timestamps directly in the
-    SQL text. Converted to bound %s parameters. Also note: the original
-    had a redundant UNION ALL of the identical query twice when the
-    range was >= 30 days - that looked like a bug (doubles every row),
-    so it's been removed; both branches now run the same single query.
-    If doubling rows for >=30-day ranges was actually intentional for
-    some downstream reason, let me know and I'll restore it.
-    """
+    
     try:
         if hours == "Custom":
             print("Time:", from_time, to_time)
@@ -587,10 +567,7 @@ def show_data(conn, hours, from_time, to_time, engineConRead):
 
 
 def process_batch_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Cleans and processes batch data. Pure pandas — no Postgres-specific
-    changes needed here.
-    """
+   
     df1 = df[~((df['Category'] == "Info") | (df['DataType'] == "STRING"))].copy()
 
     df1["Value_num"] = pd.to_numeric(df1["Value"], errors="coerce")

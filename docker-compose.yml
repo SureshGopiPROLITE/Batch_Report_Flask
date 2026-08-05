@@ -1,16 +1,71 @@
-version: "3.9"
-
 services:
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+
     container_name: skew_batch
+
     ports:
       - "5000:5000"
       - "8050:8050"
+
     environment:
       FLASK_ENV: production
       PYTHONUNBUFFERED: "1"
       TZ: Asia/Kolkata
+
+      # PostgreSQL connection
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: PLCDB2
+      DB_USER: postgres
+      DB_PASSWORD: 12345678
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+    networks:
+      - skew_network
+
+  postgres:
+    image: postgres:18
+
+    container_name: skew_postgres
+
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: PLCDB2
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 12345678
+      TZ: Asia/Kolkata
+
+      # PostgreSQL 18 data directory
+      PGDATA: /var/lib/postgresql/18/docker
+
+    ports:
+      - "5434:5432"
+
     volumes:
-      - ./PLCDB2.db:/app/PLCDB2.db
-    restart: always
+      - postgres_data:/var/lib/postgresql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d PLCDB2"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    networks:
+      - skew_network
+
+volumes:
+  postgres_data:
+
+networks:
+  skew_network:
+    driver: bridge

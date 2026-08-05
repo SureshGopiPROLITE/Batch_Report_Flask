@@ -40,156 +40,362 @@ def df_split(dfPlcdb):
 
 
 
-
 def data_process(hours, from_time, to_time):
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
-        df = sqliteCon.data_batch(conn, hours, from_time, to_time, engineConRead)
 
-        if df is not None and not df.empty:
-            # Define and filter columns
-            column_order = [
-                "BatchNo", "TimeStamp", "Plant Name", "Recipe Name",
-                "Start Date Time", "End Date Time", "Total Batch Weight"
-            ]
-            existing_columns = [col for col in column_order if col in df.columns]
-            df = df[existing_columns]
+        df = sqliteCon.data_batch(
+            conn,
+            hours,
+            from_time,
+            to_time,
+            engineConRead
+        )
 
-            # Convert to JSON-safe types
-            df = df.astype(str)
-            df["BatchNo"] = df["BatchNo"].astype(int)
-            # Sort by column 'Score' in descending order
-            df_sorted = df.sort_values(by='BatchNo', ascending=False)
-            df_sorted = df_sorted.rename(
-                columns={"Total Batch Weight": "Total Batch Weight(Kg)"}
-            )
-
-
-            total_weight_tons = round(float(df["Total Batch Weight"].astype(float).sum() / 1000), 2)
-
+        if df is None or df.empty:
             return {
                 "success": True,
-                "data": df_sorted.to_dict(orient="records"),
-                "total_weight": total_weight_tons
+                "data": [],
+                "total_weight": 0.0
             }
 
-        return {"success": True, "data": [], "total_weight": 0.0}
+        # -------------------------
+        # Keep only required columns
+        # -------------------------
+        column_order = [
+            "BatchNo",
+            "TimeStamp",
+            "Plant Name",
+            "Recipe Name",
+            "Start Date Time",
+            "End Date Time",
+            "Total Batch Weight"
+        ]
+
+        existing_columns = [c for c in column_order if c in df.columns]
+        df = df[existing_columns].copy()
+
+        # -------------------------
+        # Convert numeric columns
+        # -------------------------
+        if "BatchNo" in df.columns:
+            df["BatchNo"] = (
+                pd.to_numeric(df["BatchNo"], errors="coerce")
+                .fillna(0)
+                .astype(int)
+            )
+
+        if "Total Batch Weight" in df.columns:
+            df["Total Batch Weight"] = (
+                pd.to_numeric(df["Total Batch Weight"], errors="coerce")
+                .fillna(0)
+            )
+
+        # -------------------------
+        # Calculate total weight
+        # -------------------------
+        total_weight_tons = round(
+            df["Total Batch Weight"].sum() / 1000,
+            2
+        )
+
+        # -------------------------
+        # Sort latest batches first
+        # -------------------------
+        df = df.sort_values(
+            by="BatchNo",
+            ascending=False
+        )
+
+        # Rename column
+        df = df.rename(
+            columns={
+                "Total Batch Weight": "Total Batch Weight(Kg)"
+            }
+        )
+
+        # -------------------------
+        # Convert remaining object columns to string
+        # -------------------------
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].fillna("").astype(str)
+
+        return {
+            "success": True,
+            "data": df.to_dict(orient="records"),
+            "total_weight": total_weight_tons
+        }
 
     except Exception as e:
-        print(f"❌ Error in data_process: {e}")
-        return {"success": False, "error": str(e)}
+        print(f" Error in data_process: {e}")
+        import traceback
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 def plc_data_process(batch_no):
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
+
         query = 'SELECT * FROM plc_data WHERE "BatchNo" = %s'
         df = pd.read_sql_query(query, engineConRead, params=(batch_no,))
-        
 
         if df.empty:
-            return {"success": True, "data": []}
-        # Separate 'Info' category and transform data
+            return pd.DataFrame()
+
+        # Separate Info category
         df_string = df[df["Category"] == "Info"].copy()
         df = df[df["Category"] != "Info"].copy()
-        # print(df_string)
-        df_pivot = df.pivot(index='Category', columns='Name', values='Value')
 
-        # Maintain column order consistency
-        original_order = df['Name'].unique()
+        df_pivot = df.pivot(index="Category", columns="Name", values="Value")
+
+        original_order = df["Name"].unique()
         df_pivot = df_pivot[original_order].reset_index()
 
-        # Sort by numerical silo category if present
-        df_pivot['Category_numeric'] = df_pivot['Category'].str.extract(r'Silo-(\d+)').astype(float)
-        df_pivot = df_pivot.sort_values('Category_numeric').drop('Category_numeric', axis=1).reset_index(drop=True)
+        df_pivot["Category_numeric"] = (
+            df_pivot["Category"]
+            .str.extract(r"Silo-(\d+)")
+            .astype(float)
+        )
 
-        # Compute 'Difference' column
-        df_pivot["Difference"] = df_pivot.apply(lambda row: Report.difference(row["SetWeight"], row["ActualWeight"]), axis=1)
+        df_pivot = (
+            df_pivot.sort_values("Category_numeric")
+            .drop(columns="Category_numeric")
+            .reset_index(drop=True)
+        )
 
-        # Retrieve DailyBatchNo
-        # Same fixes as above: quoted identifiers + parameterized value.
-        query_daily_batch = 'SELECT DISTINCT "DailyBatchNo" FROM plc_data WHERE "BatchNo" = %s'
-        df_daily_batch = pd.read_sql_query(query_daily_batch, engineConRead, params=(batch_no,))
-        # print(df_daily_batch)
-        # Ensure DailyBatchNo exists and is assigned
-        if not df_daily_batch.empty:
-            DailyBatchNo = df_daily_batch.iloc[0]['DailyBatchNo']
-            print(f"BatchNo for {batch_no}: {DailyBatchNo}")
-        else:
-            DailyBatchNo = None
-            print(f"No DailyBatchNo found for BatchNo: {batch_no}")
+        # -----------------------------
+        # Convert numeric columns
+        # -----------------------------
+        numeric_columns = [
+            "SetWeight",
+            "ActualWeight",
+            "Tolerance",
+            "CoarseSpeed",
+            "FineSpeed",
+            "SiloNo",
+        ]
 
-        # Compute "State" but do not add it to df
-        state_dict = df_pivot.apply(lambda row: Report.check(row["SetWeight"], row["ActualWeight"], row["Tolerance"]), axis=1)
+        for col in numeric_columns:
+            if col in df_pivot.columns:
+                df_pivot[col] = pd.to_numeric(df_pivot[col], errors="coerce")
 
-        # Define displayed columns (excluding "State")
-        column_order = ["Category", "SiloNo", "MaterialName", "SetWeight", "ActualWeight", "Difference", "Tolerance", "CoarseSpeed", "FineSpeed"]
-        df_pivot = df_pivot[column_order]  # Only include these columns in the table
-        df_pivot["SiloNo"] = df_pivot["SiloNo"].astype(int)
+        # Difference
+        df_pivot["Difference"] = df_pivot.apply(
+            lambda row: Report.difference(
+                row["SetWeight"],
+                row["ActualWeight"]
+            ),
+            axis=1,
+        )
+
+        # Daily Batch Number
+        query_daily = '''
+            SELECT DISTINCT "DailyBatchNo"
+            FROM plc_data
+            WHERE "BatchNo" = %s
+        '''
+
+        df_daily = pd.read_sql_query(
+            query_daily,
+            engineConRead,
+            params=(batch_no,),
+        )
+
+        DailyBatchNo = (
+            df_daily.iloc[0]["DailyBatchNo"]
+            if not df_daily.empty
+            else None
+        )
+
+        print(f"BatchNo={batch_no}, DailyBatchNo={DailyBatchNo}")
+
+        # State calculation
+        state_dict = df_pivot.apply(
+            lambda row: Report.check(
+                row["SetWeight"],
+                row["ActualWeight"],
+                row["Tolerance"],
+            ),
+            axis=1,
+        )
+
+        column_order = [
+            "Category",
+            "SiloNo",
+            "MaterialName",
+            "SetWeight",
+            "ActualWeight",
+            "Difference",
+            "Tolerance",
+            "CoarseSpeed",
+            "FineSpeed",
+        ]
+
+        df_pivot = df_pivot[column_order]
+
+        if "SiloNo" in df_pivot.columns:
+            df_pivot["SiloNo"] = (
+                df_pivot["SiloNo"]
+                .fillna(0)
+                .astype(int)
+            )
 
         return df_pivot
 
     except Exception as e:
-        print(f"❌ Error in plc_data_process: {e}")
-        return {"success": False, "error": str(e)}
+        print(f" Error in plc_data_process: {e}")
+        return pd.DataFrame()
+
+import pandas as pd
 
 def report_data_process(batch_no):
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
 
-        # "BatchNo" quoted + parameterized (was an unquoted, f-string
-        # interpolated query).
         query = 'SELECT * FROM plc_data WHERE "BatchNo" = %s'
-        df = pd.read_sql_query(query, engineConRead, params=(batch_no,))
+
+        df = pd.read_sql_query(
+            query,
+            engineConRead,
+            params=(batch_no,),
+        )
 
         if df.empty:
-            return pd.DataFrame(), pd.DataFrame(), None
+            return (
+                pd.DataFrame(),
+                pd.DataFrame(),
+                None,
+                pd.DataFrame(),
+            )
 
         df_string = df[df["Category"] == "Info"].copy()
-        
 
         df_cal_sum = df[df["Category"] == "Summary"].copy()
 
-        # Convert only numeric values
-        numeric_vals = pd.to_numeric(df_cal_sum["Value"], errors="coerce")
-
-        # Round numeric ones to 2 decimals and keep date/time as original
-        df_cal_sum["Value"] = numeric_vals.round(2).astype(str).where(
-            ~numeric_vals.isna(),  # if numeric → keep rounded
-            df_cal_sum["Value"]    # if non-numeric (date/time) → keep original
+        numeric_vals = pd.to_numeric(
+            df_cal_sum["Value"],
+            errors="coerce",
         )
 
-        # Remove Info and Summary rows
-        df = df[~df["Category"].isin(["Info", "Summary"])].copy()
+        df_cal_sum["Value"] = numeric_vals.round(2).astype(str).where(
+            ~numeric_vals.isna(),
+            df_cal_sum["Value"],
+        )
 
+        df = df[
+            ~df["Category"].isin(["Info", "Summary"])
+        ].copy()
 
-        df_pivot = df.pivot(index='Category', columns='Name', values='Value')
-        original_order = df['Name'].unique()
+        df_pivot = df.pivot(
+            index="Category",
+            columns="Name",
+            values="Value",
+        )
+
+        original_order = df["Name"].unique()
+
         df_pivot = df_pivot[original_order].reset_index()
 
-        df_pivot['Category_numeric'] = df_pivot['Category'].str.extract(r'Silo-(\d+)').astype(float)
-        df_pivot = df_pivot.sort_values('Category_numeric').drop('Category_numeric', axis=1).reset_index(drop=True)
+        df_pivot["Category_numeric"] = (
+            df_pivot["Category"]
+            .str.extract(r"Silo-(\d+)")
+            .astype(float)
+        )
 
-        df_pivot["Difference"] = df_pivot.apply(lambda r: Report.difference(r["SetWeight"], r["ActualWeight"]), axis=1)
+        df_pivot = (
+            df_pivot.sort_values("Category_numeric")
+            .drop(columns="Category_numeric")
+            .reset_index(drop=True)
+        )
 
-        # Same fixes: quoted "BatchNo"/"DailyBatchNo" + parameterized value.
-        query_daily = 'SELECT DISTINCT "DailyBatchNo" FROM plc_data WHERE "BatchNo" = %s'
-        df_daily = pd.read_sql_query(query_daily, engineConRead, params=(batch_no,))
-        daily_batch_no = df_daily.iloc[0]['DailyBatchNo'] if not df_daily.empty else None
+        # -----------------------------
+        # Convert numeric columns
+        # -----------------------------
+        numeric_columns = [
+            "SetWeight",
+            "ActualWeight",
+            "Tolerance",
+            "CoarseSpeed",
+            "FineSpeed",
+            "SiloNo",
+        ]
 
-        # Define displayed columns (excluding "State")
-        column_order = ["Category", "SiloNo", "MaterialName", "SetWeight", "ActualWeight", "Difference", "Tolerance", "CoarseSpeed", "FineSpeed"]
-        df_pivot = df_pivot[column_order]  # Only include these columns in the table
-        df_pivot["SiloNo"] = df_pivot["SiloNo"].astype(int)
-        
-        return df_pivot, df_string, daily_batch_no, df_cal_sum
+        for col in numeric_columns:
+            if col in df_pivot.columns:
+                df_pivot[col] = pd.to_numeric(df_pivot[col], errors="coerce")
+
+        df_pivot["Difference"] = df_pivot.apply(
+            lambda row: Report.difference(
+                row["SetWeight"],
+                row["ActualWeight"],
+            ),
+            axis=1,
+        )
+
+        query_daily = '''
+            SELECT DISTINCT "DailyBatchNo"
+            FROM plc_data
+            WHERE "BatchNo" = %s
+        '''
+
+        df_daily = pd.read_sql_query(
+            query_daily,
+            engineConRead,
+            params=(batch_no,),
+        )
+
+        daily_batch_no = (
+            df_daily.iloc[0]["DailyBatchNo"]
+            if not df_daily.empty
+            else None
+        )
+
+        column_order = [
+            "Category",
+            "SiloNo",
+            "MaterialName",
+            "SetWeight",
+            "ActualWeight",
+            "Difference",
+            "Tolerance",
+            "CoarseSpeed",
+            "FineSpeed",
+        ]
+
+        df_pivot = df_pivot[column_order]
+
+        if "SiloNo" in df_pivot.columns:
+            df_pivot["SiloNo"] = (
+                df_pivot["SiloNo"]
+                .fillna(0)
+                .astype(int)
+            )
+
+        return (
+            df_pivot,
+            df_string,
+            daily_batch_no,
+            df_cal_sum,
+        )
+
     except Exception as e:
-        print(f"❌ Error in plc_data_process: {e}")
-        return {"success": False, "error": str(e)}
+        print(f" Error in report_data_process: {e}")
 
-
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            None,
+            pd.DataFrame(),
+        )
+    
 def dashboard_calculations(start_timestamp, end_timestamp, hours):
     try:
         
@@ -303,7 +509,6 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
 
 
         # Full table for calendar chart
-        # "Batches" is mixed-case and must be quoted.
         query_calander = 'SELECT * FROM "Batches"'
         df_calander = pd.read_sql_query(query_calander, engineConRead)
 
@@ -438,7 +643,7 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
             "line_chart": grouped.to_dict(orient="records"),
             "recipe_chart": recipe_counts.to_dict(orient="records"),
             "raw_material_chart": pivot_bar.to_dict(orient="records"),
-            "calendar_chart": calendar_chart     # <---- ADDED HERE
+            "calendar_chart": calendar_chart    
         }
 
     except Exception as e:

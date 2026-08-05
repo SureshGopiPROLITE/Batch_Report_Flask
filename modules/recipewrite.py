@@ -66,10 +66,10 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # ---------------------------------------------------------
             # PLC Connection Info
             #  --------------------------------------------------------
-            dfInfo = pd.read_sql_query('SELECT * FROM "Info_DB";',engineConRead)
+            dfInfo = pd.read_sql_query('SELECT * FROM "Info_db";',engineConRead)
             if dfInfo.empty:
                 return {"success": False,"message": "PLC configuration not found."}
-            # NOTE: relies on row 0 of "Info_DB" being the PLC connection
+            # NOTE: relies on row 0 of "Info_db" being the PLC connection
             # row. SQLite tended to preserve insertion order on a bare
             # SELECT *, but Postgres makes no such guarantee without an
             # explicit ORDER BY. Worth switching to
@@ -205,11 +205,11 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # --------------------------------------------------
             # PLC Connection Details
             # --------------------------------------------------
-            dfInfo = pd.read_sql_query('SELECT * FROM "Info_DB";',engineConRead)
+            dfInfo = pd.read_sql_query('SELECT * FROM "Info_db";',engineConRead)
             if dfInfo.empty:
                 return {"success": False,"message": "PLC configuration not found."}
             # Same positional-row caveat noted in the selected_module == 1
-            # branch above (row 0 of "Info_DB" isn't guaranteed under
+            # branch above (row 0 of "Info_db" isn't guaranteed under
             # Postgres without an explicit ORDER BY).
             plcIP = dfInfo.loc[0, "Info"]
             print("PLC IP :", plcIP)
