@@ -77,6 +77,16 @@ def data_process(hours, from_time, to_time):
         df = df[existing_columns].copy()
 
         # -------------------------
+        # Convert Timestamp to IST
+        # -------------------------
+        if "TimeStamp" in df.columns:
+            df["TimeStamp"] = (
+                pd.to_datetime(df["TimeStamp"], utc=True)
+                .dt.tz_convert("Asia/Kolkata")
+                .dt.strftime("%Y-%m-%d %H:%M:%S")
+            )
+
+        # -------------------------
         # Convert numeric columns
         # -------------------------
         if "BatchNo" in df.columns:

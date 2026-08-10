@@ -32,7 +32,7 @@ services:
       - skew_network
 
   postgres:
-    image: postgres:18
+    image: timescale/timescaledb:latest-pg18
 
     container_name: skew_postgres
 

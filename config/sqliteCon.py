@@ -24,7 +24,6 @@ def get_db_connection():
         print(f"Failed to connect to PostgreSQL: {e}")
         return None
 
-0.
 # === SQLAlchemy Engine for pandas.to_sql and read_sql ===
 def get_db_connection_engine():
     try:

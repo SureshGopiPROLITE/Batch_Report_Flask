@@ -1932,14 +1932,27 @@ def add_user():
 @app.route("/toggle_user_active", methods=["POST"])
 def toggle_user_active():
     data = request.get_json()
-    user_id = data.get("user_id")
+    user_id_raw = data.get("user_id")
     is_active = data.get("is_active")
 
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-    cursorWrite.execute("UPDATE users SET is_active=%s WHERE id=%s", (is_active, user_id))
-    conn.commit()
-    conn.close()
+    try:
+        user_id = int(user_id_raw)
+    except (TypeError, ValueError):
+        conn.close()
+        return jsonify(success=False, error=f"Invalid user_id: {user_id_raw!r}")
+
+    try:
+        cursorWrite.execute("UPDATE users SET is_active=%s WHERE id=%s", (is_active, user_id))
+        conn.commit()
+    except psycopg2.Error as e:
+        conn.rollback()   # important — failed query leaves the transaction aborted
+        conn.close()
+        return jsonify(success=False, error="Database error updating user")
+    finally:
+        if not conn.closed:
+            conn.close()
 
     return jsonify(success=True)
 
