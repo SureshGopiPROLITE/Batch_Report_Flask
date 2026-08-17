@@ -150,7 +150,7 @@ def monitor_trigger_s7(plc, df):
     return active, df_trigger
 
 def clean_plc_datetime(date_string):
-    if pd.isna(date_string):
+    if pd.isna(date_string) or str(date_string).strip() == "":
         return None
 
     date_string = re.sub(r"\s*([:-])\s*", r"\1", str(date_string).strip())
@@ -158,6 +158,28 @@ def clean_plc_datetime(date_string):
 
     dt = pd.to_datetime(date_string, errors="coerce")
     return None if pd.isna(dt) else dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ---------------------------------------------------------------
+# Byte size needed to read a given PLC data type in one db_read.
+# STRING falls back to 256 bytes (254 max-length + 2 header
+# bytes), which safely covers every STRING field in this project's
+# DB layout (PlantName, RecipeName, MaterialName, etc. are all
+# declared as String[254] in TIA Portal). Adjust the fallback if
+# a shorter/longer declared string length is ever used elsewhere.
+# ---------------------------------------------------------------
+def _tag_byte_size(data_type):
+    dt = str(data_type).upper()
+    return {
+        "BOOL": 1,
+        "INT": 2,
+        "WORD": 2,
+        "REAL": 4,
+        "DINT": 4,
+        "DWORD": 4,
+        "FLOAT": 4,
+    }.get(dt, 256)  # STRING and anything unrecognized
+
 
 def read_bulk_plc_data(plc, dfPlcdb):
     dfPlcdb = dfPlcdb.copy()
@@ -171,7 +193,14 @@ def read_bulk_plc_data(plc, dfPlcdb):
         db_rows = dfPlcdb[dfPlcdb["db_number"] == db_number]
 
         start_offset = int(db_rows["start_offset"].min())
-        end_offset = int(db_rows["start_offset"].max()) + 6
+
+        # FIX: end_offset now accounts for each tag's real size
+        # (previously hardcoded "+6", which truncated STRING reads
+        # and could even under-read trailing REAL/DINT tags).
+        end_offset = max(
+            int(row["start_offset"]) + _tag_byte_size(row["data_type"])
+            for _, row in db_rows.iterrows()
+        )
         size = end_offset - start_offset
 
         try:
@@ -207,7 +236,18 @@ def read_bulk_plc_data(plc, dfPlcdb):
                     max_len = raw_data[local_offset]
                     str_len = raw_data[local_offset + 1]
 
-                    if 0 < str_len <= max_len:
+                    # FIX: a str_len of 0 is a legitimate, valid empty
+                    # PLC string (e.g. an unused Silo's MaterialName)
+                    # and must NOT be treated as a null/failed read.
+                    if str_len == 0:
+                        value = ""
+
+                        if row["Name"] in ["Start Date Time", "End Date Time"]:
+                            value = clean_plc_datetime(value)
+
+                        dfPlcdb.at[idx, "Value"] = value
+
+                    elif 0 < str_len <= max_len:
                         value = raw_data[
                             local_offset + 2 : local_offset + 2 + str_len
                         ].decode("utf-8", errors="ignore").strip()
@@ -217,7 +257,11 @@ def read_bulk_plc_data(plc, dfPlcdb):
                             value = clean_plc_datetime(value)
 
                         dfPlcdb.at[idx, "Value"] = value
+
                     else:
+                        # str_len > max_len is genuinely corrupt/misaligned
+                        # data (bad offset, wrong DB, etc.) - keep as None
+                        # so run_logging's validation still catches it.
                         dfPlcdb.at[idx, "Value"] = None
 
                 else:

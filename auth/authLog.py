@@ -11,12 +11,12 @@ def get_user(username):
 
 
     # Fetch the user
-    cursorRead.execute('SELECT * FROM users WHERE username = ?', (username,))
+    cursorRead.execute('SELECT * FROM users WHERE username =  %s', (username,))
     user = cursorRead.fetchone()
 
     # Update last_login if user found
     if user:
-        cursorWrite.execute('UPDATE users SET last_login = ? WHERE username = ?', (current_time, username))
+        cursorWrite.execute('UPDATE users SET last_login =  %s WHERE username =  %s', (current_time, username))
         conn.commit()
 
     conn.close()
