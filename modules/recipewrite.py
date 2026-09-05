@@ -23,7 +23,7 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # Keep only actual header tags
             dfHeader = dfHeader[~dfHeader["SiloNo"].isin(["Read", "Write"])].reset_index(drop=True)
             if tagReadReady.empty:
-                return {"success": False,"message": "ReadytoReceive tag not configured."}
+                return {"success": False,"message": "ReadyToReciveRecipe tag not configured."}
             if tagWriteDwn.empty:
                 return {"success": False,"message": "RecipeDownloaded tag not configured."}
             # Convert DataFrame -> Series
@@ -62,7 +62,13 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # --------------------------------------------------------
             dfHeader.loc[dfHeader["Name"] == "PlantName","Value"] = "TEST"
             dfHeader.loc[dfHeader["Name"] == "RecipeName","Value"] = str(recipe_name)
-            dfHeader.loc[dfHeader["Name"] == "MixerSelecter", "Value"] = str(mixerno)
+            dfHeader.loc[dfHeader["Name"] == "MixerSelected","Value"] = str(mixerno)
+
+            missing = dfHeader[dfHeader["Value"].isna()]["Name"].tolist()
+            if missing:
+                msg = f"Header tag(s) not found in RecipeTagName (renamed/removed?): {missing}"
+                logging.error(msg)
+                return {"success": False, "message": msg}
             # ---------------------------------------------------------
             # PLC Connection Info
             #  --------------------------------------------------------
