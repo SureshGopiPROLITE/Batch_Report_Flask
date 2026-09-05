@@ -1,51 +1,49 @@
-import psycopg2
-from psycopg2.extras import DictCursor
+import sqlite3
 from sqlalchemy import create_engine
 import pandas as pd
-from datetime import datetime, time, timedelta
 from config.config import DB_CONFIG
+from datetime import datetime, time, timedelta
 
-
-# === Direct psycopg2 Connection (for raw cursor use) ===
+# === Direct SQLite Connection (for raw cursor use) ===
 def get_db_connection():
     try:
-        conn = psycopg2.connect(
-            dbname=DB_CONFIG['dbname'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            host=DB_CONFIG['host'],
-            port=DB_CONFIG['port'],
-            cursor_factory=DictCursor
-        )
+        conn = sqlite3.connect(DB_CONFIG)
+        conn.row_factory = sqlite3.Row  # Dict-like cursor
         cursorRead = conn.cursor()
         cursorWrite = conn.cursor()
         return conn, cursorRead, cursorWrite
     except Exception as e:
-        print(f"Failed to connect to PostgreSQL: {e}")
+        print(f"Failed to connect to SQLite: {e}")
         return None
 
+
+# === SQLAlchemy Engine for pandas.to_sql and read_sql ===
 # === SQLAlchemy Engine for pandas.to_sql and read_sql ===
 def get_db_connection_engine():
     try:
-        db_url = (
-            f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}@"
-            f"{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
-        )
-        engine = create_engine(db_url)
+        # SQLite connection URL
+        db_url = f"sqlite:///{DB_CONFIG}"
+
+        # Create SQLAlchemy engine
+        engine = create_engine(db_url, echo=False)
+
+        # Separate read and write connections
         engineConRead = engine.connect()
         engineConWrite = engine.connect()
-        print(" Postgres SQLAlchemy engine created successfully.")
-        return engine, engineConRead, engineConWrite
-    except Exception as e:
-        print(f" Failed to create SQLAlchemy engine: {e}")
-        return None, None, None
 
+        print("✅ SQLite SQLAlchemy engine created successfully.")
+        return engine, engineConRead, engineConWrite
+
+    except Exception as e:
+        print(f"❌ Failed to create SQLAlchemy engine: {e}")
+        return None, None, None
 
 # === Example Function to Read Users Table ===
 def dfUser():
+    conn, cursorRead, cursorWrite = get_db_connection()
     engine, engineConRead, engineConWrite = get_db_connection_engine()
     query = "SELECT id, username, role, is_active, last_login FROM users WHERE role != 'superadmin';"
-    df = pd.read_sql_query(query, engineConRead)
+    df = pd.read_sql_query(query, conn)
     df.columns = ['Id', 'Username', 'Role', 'Is_Active', 'LastLogin']
     df = df.sort_values(by='Id', ascending=True).reset_index(drop=True)
 
@@ -57,6 +55,7 @@ def dfUser():
 
 # === Insert Batch Function ===
 def insertBatch(df):
+    print("Starting batch insertion...")
 
     engine, engineConRead, engineConWrite = get_db_connection_engine()
 
@@ -64,347 +63,102 @@ def insertBatch(df):
         print("Dataframe is empty. No data to insert.")
         return
 
-    try:
-        # Separate Info category
-        df_string = df[df["Category"] == "Info"].copy()
-        df = df[df["Category"] != "Info"].copy()
+    # Separate 'Info' category from other data
+    df_string = df[df["Category"] == "Info"].copy()
+    df = df[df["Category"] != "Info"].copy()
+    df_string = df_string.reset_index(drop=True)
 
-        df_string.reset_index(drop=True, inplace=True)
+    if df_string.empty:
+        print("No 'Info' category data found. Skipping batch metadata insertion.")
+    else:
+        # Pivot Info data
+        df_pivot_1 = df_string.pivot(index='BatchNo', columns='Name', values='Value')
 
-        if df_string.empty:
-            print("No 'Info' category data found.")
-            return
-
-        # ---------------------------------------------------------
-        # Remove duplicate BatchNo + Name combinations
-        # ---------------------------------------------------------
-        df_string = df_string.drop_duplicates(
-            subset=["BatchNo", "Name"],
-            keep="last"
-        )
-
-        # ---------------------------------------------------------
-        # Pivot Info data safely
-        # ---------------------------------------------------------
-        df_pivot_1 = df_string.pivot_table(
-            index='BatchNo',
-            columns='Name',
-            values='Value',
-            aggfunc='first'
-        )
-
-        # Add Timestamp
-        timestamp_df = (
-            df_string
-            .drop_duplicates(subset='BatchNo')
+        # Add Timestamp column from unique batch entries
+        df_pivot_1['TimeStamp'] = (
+            df_string.drop_duplicates(subset='BatchNo')
             .set_index('BatchNo')['Timestamp']
         )
+        df_pivot_1 = df_pivot_1.reset_index()
 
-        df_pivot_1['TimeStamp'] = timestamp_df
-
-        df_pivot_1.reset_index(inplace=True)
-
-        # ---------------------------------------------------------
-        # Calculate Total Batch Weight
-        # ---------------------------------------------------------
-        if "ActualWeight" in df["Name"].values:
-
-            df_weight = (
-                df[df["Name"] == "ActualWeight"]
-                .groupby("BatchNo")["Value"]
-                .sum()
-                .reset_index()
-            )
-
-            df_weight.rename(
-                columns={"Value": "Total Batch Weight"},
-                inplace=True
-            )
-
-            df_weight["Total Batch Weight"] = (
-                df_weight["Total Batch Weight"]
-                .round(2)
-            )
-
-            df_pivot_1 = df_pivot_1.merge(
-                df_weight,
-                on="BatchNo",
-                how="left"
-            )
-
-        else:
-            df_pivot_1["Total Batch Weight"] = 0
-
-        # ---------------------------------------------------------
-        # Add DailyBatchNo if available
-        # ---------------------------------------------------------
-        if "DailyBatchNo" in df.columns:
-
-            df_daily = (
-                df[['BatchNo', 'DailyBatchNo']]
-                .drop_duplicates(subset=['BatchNo'])
-            )
-
-            df_pivot_1 = df_pivot_1.merge(
-                df_daily,
-                on='BatchNo',
-                how='left'
-            )
-
-        # ---------------------------------------------------------
-        # Check Postgres table columns
-        # (was: PRAGMA table_info(batches) - SQLite only.
-        # Postgres equivalent is information_schema.columns.)
-        # ---------------------------------------------------------
-        db_cols = pd.read_sql_query(
-            """
-            SELECT column_name AS name
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'batches'
-            """,
-            engineConRead
-        )['name'].tolist()
-
-        print("Postgres columns:", db_cols)
-
-        # Keep only columns that exist in DB
-        insert_cols = [
-            col for col in df_pivot_1.columns
-            if col in db_cols
+        # Define expected column order (adjust to your SQLite schema)
+        column_order = [
+            "BatchNo", "DailyBatchNo", "TimeStamp",
+            "Plant Name", "Recipe Name", "Start Date Time", "End Date Time"
         ]
+        df_pivot_1 = df_pivot_1.reindex(columns=column_order, fill_value=None)
 
-        df_insert = df_pivot_1[insert_cols]
-
-        print("Columns to insert:")
-        print(df_insert.columns.tolist())
-
-        print(df_insert.head())
-
-        # ---------------------------------------------------------
-        # Insert into Postgres
-        # ---------------------------------------------------------
-        df_insert.to_sql(
-            "batches",
-            con=engineConWrite,
-            if_exists="append",
-            index=False,
-            method='multi'
+        # Total Batch Weight calculation
+        df_weight = (
+            df[df["Name"] == "ActualWeight"]
+            .groupby("BatchNo")["Value"]
+            .sum()
+            .reset_index()
         )
+        df_weight["Total Batch Weight"] = df_weight["Value"].round(2)
+        df_weight.drop(columns=["Value"], inplace=True)
 
-        print(" Batch metadata inserted successfully.")
+        # Add DailyBatchNo to pivoted data
+        df_daily_batch = df[['BatchNo', 'DailyBatchNo']].drop_duplicates()
+        df_pivot_1 = df_pivot_1.merge(df_daily_batch, on="BatchNo", how="left")
 
-    except Exception as e:
-        print(f" Error during batch insertion: {e}")
+        # Merge weights
+        df_pivot_1 = df_pivot_1.merge(df_weight, on="BatchNo", how="left")
 
-    finally:
-        print("Batch insertion completed.")
+        # Insert into SQLite
+        try:
+            df_pivot_1.to_sql("batches", con=engineConWrite, if_exists="append", index=False, method='multi')
+            print("Batch metadata inserted successfully into SQLite.")
+        except Exception as e:
+            print(f"Error during SQLite insertion: {e}")
+
+    print("Batch insertion completed.")
 
 
 # === Material Extraction Update ===
 def insertMaterialExtraction(dfPlcdb, engineConRead, cursorWrite, conn):
     try:
-        print("Starting Material Extraction...")
+        # Material Index Preparation
+        dfPlcdb['MaterialIndex'] = dfPlcdb.loc[dfPlcdb['Name'] == 'MaterialName', 'Value']
+        dfPlcdb['MaterialIndex'] = dfPlcdb.groupby('Category')['MaterialIndex'].transform(lambda x: x.ffill().bfill())
+        dfPlcdb = dfPlcdb.infer_objects(copy=False)
 
-        # ---------------------------------------------------------
-        # Prepare Material Index
-        # ---------------------------------------------------------
-        dfPlcdb = dfPlcdb.copy()
+        # Filter & Pivot
+        df_filtered = dfPlcdb[dfPlcdb['Name'].isin(['ActualWeight', 'SetWeight'])].reset_index(drop=True)
+        df_pivot = df_filtered.pivot(index='MaterialIndex', columns='Name', values='Value')
+        df_pivot = df_pivot.reset_index().rename(columns={'MaterialIndex': 'MaterialName'})
 
-        # Get MaterialName values
-        dfPlcdb['MaterialIndex'] = dfPlcdb.loc[
-            dfPlcdb['Name'] == 'MaterialName',
-            'Value'
-        ]
+        # Convert ActualWeight from kg to tons
+        df_pivot['ActualWeight'] = df_pivot['ActualWeight'].div(1000).round(2)
 
-        # Forward/Backward fill within each category
-        dfPlcdb['MaterialIndex'] = (
-            dfPlcdb.groupby('Category')['MaterialIndex']
-            .transform(lambda x: x.ffill().bfill())
-            .infer_objects(copy=False)
-        )
+        # Load Existing MaterialData
+        existing_data = pd.read_sql('SELECT SiloNo, MaterialName, TotalExtracted FROM MaterialData', con=engineConRead)
 
-        # Convert to string
-        dfPlcdb['MaterialIndex'] = (
-            dfPlcdb['MaterialIndex']
-            .astype(str)
-            .str.strip()
-        )
+        # Merge and Calculate
+        df_merged = pd.merge(df_pivot, existing_data, on='MaterialName', how='inner')
+        df_merged['ActualWeight'] = pd.to_numeric(df_merged['ActualWeight'], errors='coerce').fillna(0)
+        df_merged['TotalExtracted'] = pd.to_numeric(df_merged['TotalExtracted'], errors='coerce').fillna(0)
+        df_merged['TotalWeight'] = df_merged['ActualWeight'] + df_merged['TotalExtracted']
 
-        # Remove invalid PLC values
-        invalid_values = [
-            'nan',
-            'None',
-            '',
-            '0.0',
-            '-4.253529586511731e+37',
-            '-4.253530e+37'
-        ]
-
-        dfPlcdb = dfPlcdb[
-            ~dfPlcdb['MaterialIndex'].isin(invalid_values)
-        ]
-
-        # ---------------------------------------------------------
-        # Filter Required Rows
-        # ---------------------------------------------------------
-        df_filtered = dfPlcdb[
-            dfPlcdb['Name'].isin(['ActualWeight', 'SetWeight'])
-        ].copy()
-
-        if df_filtered.empty:
-            print("No material data found.")
-            return
-
-        # ---------------------------------------------------------
-        # Find duplicates
-        # ---------------------------------------------------------
-        duplicates = df_filtered[
-            df_filtered.duplicated(
-                subset=['MaterialIndex', 'Name'],
-                keep=False
-            )
-        ]
-
-        if not duplicates.empty:
-            print("Duplicate rows found:")
-            print(
-                duplicates[
-                    ['Category', 'MaterialIndex', 'Name', 'Value']
-                ]
-            )
-
-        # Keep last duplicate
-        df_filtered = df_filtered.drop_duplicates(
-            subset=['MaterialIndex', 'Name'],
-            keep='last'
-        )
-
-        # ---------------------------------------------------------
-        # Pivot safely
-        # ---------------------------------------------------------
-        df_pivot = (
-            df_filtered.pivot_table(
-                index='MaterialIndex',
-                columns='Name',
-                values='Value',
-                aggfunc='first'
-            )
-            .reset_index()
-        )
-
-        df_pivot.rename(
-            columns={'MaterialIndex': 'MaterialName'},
-            inplace=True
-        )
-
-        # ---------------------------------------------------------
-        # Convert weights
-        # ---------------------------------------------------------
-        if 'ActualWeight' in df_pivot.columns:
-            df_pivot['ActualWeight'] = (
-                pd.to_numeric(
-                    df_pivot['ActualWeight'],
-                    errors='coerce'
-                )
-                .fillna(0)
-                .div(1000)
-                .round(2)
-            )
-        else:
-            df_pivot['ActualWeight'] = 0
-
-        # ---------------------------------------------------------
-        # Read existing Postgres data
-        # ---------------------------------------------------------
-        existing_data = pd.read_sql(
-            '''
-            SELECT
-                "SiloNo",
-                "MaterialName",
-                "TotalExtracted"
-            FROM "MaterialData"
-            ''',
-            con=engineConRead
-        )
-
-        existing_data['MaterialName'] = (
-            existing_data['MaterialName']
-            .astype(str)
-            .str.strip()
-        )
-
-        df_pivot['MaterialName'] = (
-            df_pivot['MaterialName']
-            .astype(str)
-            .str.strip()
-        )
-
-        print("\nPLC Materials:")
-        print(df_pivot['MaterialName'].tolist())
-
-        print("\nDB Materials:")
-        print(existing_data['MaterialName'].tolist())
-
-        # ---------------------------------------------------------
-        # Merge
-        # ---------------------------------------------------------
-        df_merged = pd.merge(
-            df_pivot,
-            existing_data,
-            on='MaterialName',
-            how='inner'
-        )
-
-        if df_merged.empty:
-            print("No matching materials found.")
-            return
-
-        df_merged['TotalExtracted'] = pd.to_numeric(
-            df_merged['TotalExtracted'],
-            errors='coerce'
-        ).fillna(0)
-
-        df_merged['TotalWeight'] = (
-            df_merged['ActualWeight'] +
-            df_merged['TotalExtracted']
-        )
-
-        print("\nMerged Data:")
         print(df_merged)
 
-        # ---------------------------------------------------------
-        # Update Postgres (was: "?" placeholders - now "%s")
-        # ---------------------------------------------------------
-        update_query = """
-            UPDATE "MaterialData"
-            SET "TotalExtracted" = %s
-            WHERE "MaterialName" = %s
-        """
-
-        for _, row in df_merged.iterrows():
-            cursorWrite.execute(
-                update_query,
-                (
-                    float(row['TotalWeight']),
-                    row['MaterialName']
-                )
-            )
+        # Update SQLite Table
+        for index, row in df_merged.iterrows():
+            update_query = """
+            UPDATE MaterialData
+            SET TotalExtracted = ?
+            WHERE MaterialName = ?;
+            """
+            cursorWrite.execute(update_query, (row['TotalWeight'], row['MaterialName']))
 
         conn.commit()
-
-        print(
-            " TotalWeight values successfully updated "
-            "in MaterialData."
-        )
+        print("TotalWeight values successfully updated in MaterialData (SQLite).")
 
     except Exception as e:
-        import traceback
-        print(" Error occurred:", e)
-        traceback.print_exc()
+        print("Error occurred:", e)
 
 
 def data_batch(conn, hours, from_time, to_time, engineConRead):
-
     try:
         if hours == "Custom":
             print("Time:", from_time, to_time)
@@ -413,49 +167,60 @@ def data_batch(conn, hours, from_time, to_time, engineConRead):
                 from_time_dt = datetime.fromisoformat(from_time)
                 to_time_dt = datetime.fromisoformat(to_time)
             except Exception:
-                print(" Invalid datetime format, received:", from_time, to_time)
+                print("⚠️ Invalid datetime format, received:", from_time, to_time)
                 return None
 
-            query = """
-                SELECT DISTINCT * FROM "Batches"
-                WHERE "TimeStamp" BETWEEN %s AND %s
-                ORDER BY "TimeStamp" ASC;
+            from_time_sql = from_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+            to_time_sql = to_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            query = f"""
+                SELECT DISTINCT * FROM Batches
+                WHERE TimeStamp BETWEEN '{from_time_sql}' AND '{to_time_sql}'
+                ORDER BY TimeStamp ASC;
             """
-            params = (from_time_dt, to_time_dt)
 
         elif hours in ["1 Hr", "4 Hr", "8 Hr", "12 Hr", "24 Hr"]:
             hours_mapping = {"1 Hr": 1, "4 Hr": 4, "8 Hr": 8, "12 Hr": 12, "24 Hr": 24}
             from_time_dt = datetime.now() - timedelta(hours=hours_mapping[hours])
+            from_time_sql = from_time_dt.strftime('%Y-%m-%d %H:%M:%S')
 
-            query = """
-                SELECT DISTINCT * FROM "Batches"
-                WHERE "TimeStamp" >= %s
-                ORDER BY "TimeStamp" ASC;
+            query = f"""
+                SELECT DISTINCT * FROM Batches
+                WHERE TimeStamp >= '{from_time_sql}'
+                ORDER BY TimeStamp ASC;
             """
-            params = (from_time_dt,)
         else:
-            print(" Invalid hours option:", hours)
+            print("⚠️ Invalid hours option:", hours)
             return None
 
-        
+        print("Executing query:\n", query)
 
-        df = pd.read_sql_query(query, con=engineConRead, params=params)
+        # ✅ Fix: pass engine or connection directly — not a transaction object
+        df = pd.read_sql_query(query, con=engineConRead)
 
         if df.empty:
-            print(" No data returned for given filters.")
+            print("ℹ️ No data returned for given filters.")
             return None
 
         df = df.drop_duplicates(subset=["BatchNo"], keep="first")
-        print(f" Retrieved {len(df)} records.")
+        print(f"✅ Retrieved {len(df)} records.")
         return df
 
     except Exception as e:
-        print(f" Error in data_batch: {e}")
+        print(f"❌ Error in data_batch: {e}")
         return None
-
-
+    
 def get_silo_pivot(df: pd.DataFrame, silo: str) -> pd.DataFrame:
- 
+    """
+    Filter and pivot silo data per timestamp (minute-level) for a given silo.
+
+    Args:
+        df (pd.DataFrame): Raw DataFrame with columns [Category, TimeStamp, Name, Value, DataType].
+        silo (str): The silo name (e.g., "Silo-1").
+
+    Returns:
+        pd.DataFrame: Pivoted DataFrame with required columns + row-wise error calculations.
+    """
     # Step 1: Filter by silo and remove unwanted rows
     df_filtered = df[df["Category"] == silo].copy()
     df_filtered = df_filtered[~((df_filtered["Category"] == "Info") | (df_filtered["DataType"] == "STRING"))]
@@ -465,7 +230,7 @@ def get_silo_pivot(df: pd.DataFrame, silo: str) -> pd.DataFrame:
 
     # Step 2b: Convert TimeStamp to datetime and truncate to minutes
     df_filtered["TimeStamp"] = pd.to_datetime(df_filtered["TimeStamp"], errors="coerce")
-    df_filtered["TimeStamp"] = df_filtered["TimeStamp"].dt.floor('min')
+    df_filtered["TimeStamp"] = df_filtered["TimeStamp"].dt.floor('min')  # use 'min' instead of deprecated 'T'
 
     # Step 3: Pivot to wide format with minute-level TimeStamp
     df_pivot = (
@@ -509,30 +274,42 @@ def get_silo_pivot(df: pd.DataFrame, silo: str) -> pd.DataFrame:
 
     return df_pivot
 
-
 def show_data(conn, hours, from_time, to_time, engineConRead):
-    
     try:
         if hours == "Custom":
             print("Time:", from_time, to_time)
-
+            
             from_time_dt = datetime.fromisoformat(from_time)
             to_time_dt = datetime.fromisoformat(to_time)
 
+            # Calculate the difference
             date_diff = to_time_dt - from_time_dt
-            print("Date Difference:", date_diff.days)
-
-            query = """
-                SELECT * FROM plc_data
-                WHERE "TimeStamp" BETWEEN %s AND %s
-                ORDER BY "TimeStamp" ASC;
-            """
-            params = (from_time_dt, to_time_dt)
-
+            print("Date Difference:", date_diff.days)    
             
-            df = pd.read_sql_query(query, engineConRead, params=params)
+            if date_diff.days >= 30:
+                # Query database for data between specified timestamps from both tables
+                query = f"""
+                SELECT * FROM plc_data
+                WHERE TimeStamp BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
+                
+                UNION ALL
+                
+                SELECT * FROM plc_data
+                WHERE TimeStamp BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
+                ORDER BY TimeStamp ASC;
+                """
+            else:
+                # Query database for data between specified timestamps   
+                query = f"""
+                SELECT * FROM plc_data
+                WHERE TimeStamp BETWEEN '{from_time.replace("T", " ")}' AND '{to_time.replace("T", " ")}'
+                ORDER BY TimeStamp ASC;
+                """
+            print("Executing query:", query)
+            df = pd.read_sql_query(query, engineConRead)
 
         elif hours in ["1 Hr", "4 Hr", "8 Hr", "12 Hr", "24 Hr"]:
+            # Determine the hour range for predefined selections
             hours_mapping = {
                 "1 Hr": 1,
                 "4 Hr": 4,
@@ -541,23 +318,26 @@ def show_data(conn, hours, from_time, to_time, engineConRead):
                 "24 Hr": 24
             }
             hours_ago = hours_mapping[hours]
-            from_time_dt = datetime.now() - timedelta(hours=hours_ago)
 
-            query = """
+            # Calculate the time range for the query
+            from_time_dt = datetime.now() - timedelta(hours=hours_ago)
+            from_time = from_time_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            # Construct the SQL query based on the selected hours range
+            query = f"""
                 SELECT *
                 FROM plc_data
-                WHERE "TimeStamp" >= %s
-                ORDER BY "TimeStamp" ASC;
+                WHERE TimeStamp >= '{from_time}'
+                ORDER BY TimeStamp ASC;
             """
-            params = (from_time_dt,)
-
-            
-            df = pd.read_sql_query(query, engineConRead, params=params)
+            print("Executing query:", query)
+            df = pd.read_sql_query(query, engineConRead)
 
         else:
             print("Select a valid time range")
             return None
 
+        # Return the DataFrame for further processing
         return df
 
     except Exception as e:
@@ -565,22 +345,39 @@ def show_data(conn, hours, from_time, to_time, engineConRead):
         return None
 
 
-def process_batch_data(df: pd.DataFrame) -> pd.DataFrame:
-   
-    df1 = df[~((df['Category'] == "Info") | (df['DataType'] == "STRING"))].copy()
 
+def process_batch_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Cleans and processes batch data:
+    1. Drops rows with Category == 'Info' or DataType == 'STRING'
+    2. Converts Value to numeric
+    3. Creates pivot with BatchNo + Category
+    4. Calculates Error_Kg and Error_%
+    5. Removes outliers using IQR
+    6. Groups by Category and aggregates
+    
+    Returns:
+        pd.DataFrame: Grouped and aggregated results
+    """
+    # Step 1: Drop unwanted rows
+    df1 = df[~((df['Category'] == "Info") | (df['DataType'] == "STRING"))].copy()
+    
+    # Step 2: Convert Value column
     df1["Value_num"] = pd.to_numeric(df1["Value"], errors="coerce")
     df1.drop("Value", axis=1, inplace=True)
-
+    
+    # Step 3: Pivot
     df_pivot = df1.pivot_table(
-        index=["BatchNo", "Category"],
-        columns=["Name"],
+        index=["BatchNo", "Category"], 
+        columns=["Name"], 
         values="Value_num"
     )
-
+    
+    # Step 4: Error calculations
     df_pivot["Error_Kg"] = df_pivot["ActualWeight"] - df_pivot["SetWeight"]
     df_pivot["Error_%"] = (df_pivot["Error_Kg"] / df_pivot["SetWeight"]) * 100
-
+    
+    # Step 5: IQR outlier removal
     Q1 = df_pivot["Error_%"].quantile(0.25)
     Q3 = df_pivot["Error_%"].quantile(0.75)
     IQR = Q3 - Q1
@@ -588,7 +385,8 @@ def process_batch_data(df: pd.DataFrame) -> pd.DataFrame:
         (df_pivot["Error_%"] >= (Q1 - 1.5 * IQR)) &
         (df_pivot["Error_%"] <= (Q3 + 1.5 * IQR))
     ]
-
+    
+    # Step 6: Group and aggregate
     df_group = (
         df_clean.groupby("Category")
         .agg({
@@ -598,9 +396,10 @@ def process_batch_data(df: pd.DataFrame) -> pd.DataFrame:
             "Error_%": "mean"
         })
         .sort_values("Error_%", ascending=False)
-        .reset_index()
+        .reset_index()   # 👈 this ensures Category is kept as a column
     )
+    # Round error columns
     df_group["Error_Kg"] = df_group["Error_Kg"].round(2)
     df_group["Error_%"] = df_group["Error_%"].round(2)
-
+    
     return df_group

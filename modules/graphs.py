@@ -113,12 +113,11 @@ def plot_error_percent(df):
 
 def show_bar(engineConRead):
     try:
-        # ✅ Postgres equivalent of SQLite's datetime('now', '-6 days')
         sql = """
-            SELECT "TimeStamp", "BatchNo"
+            SELECT TimeStamp, BatchNo
             FROM plc_data
-            WHERE "TimeStamp" >= NOW() - INTERVAL '6 days'
-            GROUP BY "BatchNo", "TimeStamp";
+            WHERE TimeStamp >= datetime('now', '-6 days')
+            GROUP BY BatchNo;
             """
         df_bargh = pd.read_sql_query(sql, engineConRead)
         df = df_bargh
@@ -182,3 +181,19 @@ def show_speed(Total_seconds):
         print(f"❌ Error in show_speed: {e}")
         # Always return a dummy figure so caller won't crash
         return go.Figure()
+    	    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

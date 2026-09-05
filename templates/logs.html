@@ -4,46 +4,13 @@
     <div class="inv-navbar-left">
         <h3 class="inv-app-title">Logs</h3>
     </div>
-    <div id="clear-btn" class="inv-navbar-right">
+    <div class="inv-navbar-right">
         <button class="inv-button">Clear</button>
     </div>
 </div>
-<div id="log-container" class="logs-content">
+<div class="logs-content">
     <div class="logs-page">
-        <p>Loading...</p>
+        <p>2025-05-15 15:57:53,436 - INFO - Welcome to Batch Report</p>
     </div>
 </div>
-
-<script>
-    const logBox = document.getElementById("log-container");
-    const clearBtn = document.getElementById("clear-btn");
-
-    async function fetchLogs() {
-        try {
-            const res = await fetch("/api/logs");
-            const data = await res.json();
-            logBox.innerHTML = data.logs
-                .map(line => `<div>${escapeHtml(line)}</div>`)
-                .join("");
-            logBox.scrollTop = logBox.scrollHeight;
-        } catch (err) {
-            console.error("Failed to fetch logs:", err);
-        }
-    }
-
-    function escapeHtml(str) {
-        const div = document.createElement("div");
-        div.textContent = str;
-        return div.innerHTML;
-    }
-
-    clearBtn.addEventListener("click", async () => {
-        await fetch("/api/logs/clear", { method: "POST" });
-        fetchLogs();
-    });
-
-    fetchLogs();
-    setInterval(fetchLogs, 3000);
-</script>
 {% endblock %}
-

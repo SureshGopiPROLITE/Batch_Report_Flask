@@ -10,19 +10,7 @@ def connectABPLC(plc_ip):
     except Exception as e:
         print(f"Error connecting to AB PLC: {e}")
         return None
-    
-def readABPLC_bulk(plc, tag_list):
-    """
-    Reads a list of tags from AB PLC using pylogix and returns results and timestamp.
-    """
-    try:
-        results = plc.Read(tag_list)  # Bulk read
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        return results, timestamp
-    except Exception as e:
-        print(f"❌ Error reading PLC tags: {e}")
-        return [], None
-    
+
 def readABPLC(plc, tag_name, data_type):
     try:
         result = plc.Read(tag_name)
@@ -81,19 +69,17 @@ def set_tag_ab(plc, tag_name):
     except Exception as e:
         print(f"Error in reset_trigger_tag_ab: {e}")
 
+
 def lifeCounter(plc, df):
     try:
-        print(df.columns)
-
-        tag_name = df.loc[0, 'Name']
+        tag_name = df.loc[0, 'Tag_name']
         read_result = plc.Read(tag_name)
 
         if read_result.Status != "Success":
             return False
 
         write_value = read_result.Value
-
-        tag_name_to_write = df.loc[1, 'Name']
+        tag_name_to_write = df.loc[1, 'Tag_name']
         write_result = plc.Write(tag_name_to_write, write_value)
 
         return write_result.Status == "Success"
@@ -101,6 +87,7 @@ def lifeCounter(plc, df):
     except Exception as e:
         print(f"Error in lifeCounter: {e}")
         return False
+
 
 def writeinAb(plc, tag_name, write_value):
     try:

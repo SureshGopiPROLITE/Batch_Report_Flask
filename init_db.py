@@ -69,7 +69,7 @@
 #     password_hash = generate_password_hash(password)
 #     try:
 #         cursor.execute(
-#             "INSERT INTO users (user_name, password_hash, role, status) VALUES (%s, %s, %s, %s)",
+#             "INSERT INTO users (user_name, password_hash, role, status) VALUES (?, ?, ?, ?)",
 #             (username, password_hash, role, status)
 #         )
 #         print(f"User {username} added.")

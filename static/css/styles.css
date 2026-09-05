@@ -15,15 +15,7 @@ body {
   overflow-y: auto;
   font-family: Arial, sans-serif;
 }
-/* ==============================
-   recipe mixer no 
-============================== */
-#mixerNo {
-    width: 40px;
-    border: 1px solid #ccc;
-    text-align: center;
-    padding: 1px;
-}
+
 
 /* ==============================
    GLOBAL GRID
@@ -517,7 +509,7 @@ body {
 
 .inv-navbar-left .icon-button {
     height: 4vh;
-    width: 3rem;
+    width: 2rem;
     border-radius: 0.3rem;
     background-color: #005da2;
     color: white;
@@ -624,7 +616,7 @@ body {
 
 .inv-navbar-right.recipe .icon-button {
     height: 4vh;
-    width: 2.6rem;
+    width: 2rem;
     border-radius: 0.3rem;
     background-color: #005da2;
     color: white;
@@ -645,7 +637,6 @@ body {
     border: 1px solid #999;
     opacity: 0.7;
 }
-
 
 /* ================================
    📌 RECIPE PAGE LAYOUT
@@ -1160,7 +1151,6 @@ body {
   justify-content: center;
   align-items: center;
   z-index: 2000;
-  
 }
 
 .popup-content {
@@ -1191,22 +1181,13 @@ body {
   justify-content: flex-end;
   gap: 10px;
 }
-.inv-button.warning {
-    background-color: #dc3545;   /* Red */
-    color: #fff !important;      /* White text */
-    border: none;
-}
 
-.inv-button.warning:hover {
-    background-color: #c82333;
-    color: #fff !important;
-}
 /* ==============================
    🧭 STOCKS HEADER (ADD + SEARCH)
 ============================== */
 .add-btn {
   height: 4vh;
-  width: 4rem;
+  width: 6rem;
   border-radius: 0.3rem;
   background-color: #005da2;
   color: white;
@@ -1429,7 +1410,7 @@ body {
 }
 
 .table-action-btn:hover {
-  background-color: #e4e6eb;
+  background-color: #e8f0ff;
   border-color: #005da2;
   transform: scale(1.05);
 }
@@ -1761,496 +1742,243 @@ tr.editing input:focus {
     box-shadow: 0 0 3px rgba(0,0,0,0.5);
     height: 81.5vh;
 }
-/* Logs page container */
-.logs-content {
-    background-color: #f5f7fa;
-    color: #2c2c2c;
-    border-radius: 8px;
-    border: 1px solid #d0d4d9;
-    height: 80vh;              /* was fixed at 600px, now scales with the screen */
-    max-height: 850px;         /* caps it on very tall screens */
-    overflow-y: auto;
-    padding: 16px 20px;
-    margin: 16px 0;
-    font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 16px;
-    line-height: 1.6;
+
+
+.settings-content {
+    width: 100%;
+    padding: 0.5rem;
+    background-color: #f4f6f8;
+    box-shadow: 0 0 3px rgba(0,0,0,0.5);
+    height: 81.5vh;
 }
 
-/* each log line */
-.logs-content div {
-    padding: 3px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-.logs-content div:last-child {
-    border-bottom: none;
-}
-
-/* navbar spacing above the box */
-.inv-navbar {
+.settings-content .upper {
     display: flex;
-    justify-content: space-between;
+    gap: 0.3rem;
+    width: 100%;
+    height: 33vh;
+}
+
+.settings-content .upper .upper-right {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    width: 50%;
+    height: 33vh;
+    background-color: #fff;
+    border: 1px solid #ccc;
+    overflow: auto;
+}
+
+.upper-right .top{
+    display: flex;
     align-items: center;
-    padding: 12px 20px;
-    margin-bottom: 12px;
-}
-/* ===========================
-   SETTINGS PAGE
-=========================== */
-
-.settings-page{
-    padding:24px;
-    background:#f7f9fc;
-    min-height:100px;
+    justify-content: center;
+    height: 13vh;
+    font-size: 0.95rem;
+    padding: 0 1rem;
 }
 
-.page-header{
-    margin-bottom:24px;
+.upper-right .bottom{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 13vh;
+    font-size: 0.95rem;
+    padding: 0 1rem;
 }
 
-.page-header h1{
-    margin:0;
-    font-size:30px;
-    font-weight:600;
-    color:#005da2;
-}
-
-.page-header p{
-    margin-top:6px;
-    color:#6b7280;
-}
-
-/* ===========================
-   GRID
-=========================== */
-
-.settings-grid{
-    display:grid;
-    grid-template-columns:repeat(2,1fr);
-    gap:24px;
-}
-
-/* ===========================
-   CARD
-=========================== */
-
-.settings-card{
-    background:#fff;
-    height: 410px;
-    
-    border:1px solid #e5e7eb;
-    border-radius:12px;
-    overflow:hidden;
-    box-shadow:0 2px 8px rgba(0,0,0,0.05);
-}
-
-.card-header{
-    padding:18px 22px;
-    border-bottom:1px solid #e5e7eb;
-}
-
-.card-header h3{
-    margin:0;
-    color:#005da2;
-    font-size:20px;
-}
-
-.card-body{
-    padding:24px;
-}
-/* ==========================================================
-   Recipe Table Columns
-========================================================== */
-
-.column-toggle-group{
-    display:flex;
-    align-items:flex-start;
-    gap:12px;
-}
-
-.column-toggle-list{
-    flex:1;
-    display:flex;
-    flex-direction:column;
-    gap:14px;
-    padding:12px 14px;
-    border:1px solid #ced4da;
-    border-radius:6px;
-    background:#fff;
-    min-height:50px;
-}
-
-.toggle-row{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    font-size:14px;
-    font-weight:500;
-    color:#212529;
-    cursor:pointer;
-}
-
-.toggle-row input[type="checkbox"]{
-    width:18px;
-    height:18px;
-    accent-color:#0d6efd;
-    cursor:pointer;
-    flex-shrink:0;
-}
-
-.toggle-row:hover{
-    color:#0d6efd;
-}
-
-.column-toggle-group .set-button{
-    height:38px;
-    min-width:60px;
-    margin-top: 4px;
-    align-self:flex-start;
-}
-/* ===========================
-   FORM
-=========================== */
-
-.form-row{
-    display:flex;
-    flex-direction:column;
-    gap:8px;
-    margin-bottom:24px;
-}
-
-.form-row label{
-    font-weight:550;
-    color:#000000;
-}
-
-.input-group{
-    display:flex;
-    gap:12px;
-}
-
-input,
-select{
-    width:100%;
-    height:42px;
-    padding:0 14px;
-    border:1px solid #d1d5db;
-    border-radius:8px;
-    font-size:14px;
-    outline:none;
-}
-
-input:focus,
-select:focus{
-    border-color:#005da2;
-}
-
-/* ===========================
-   BUTTONS
-=========================== */
-
-.set-button{
-    border:none;
-    cursor:pointer;
-    padding:10px 18px;
-    border-radius:8px; 
-    background:#005da2;
-    color:white;
-    font-weight:500;
-    transition:.2s;
-}
-
-button:hover{
-    background:#004c84;
-}
-
-.secondary-btn{
-    cursor:pointer;
-    background:#eef4ff;
-    color:#005da2;
-    border:1px solid #d7e3ff;
-    padding: 10PX;
-    border-radius:8px; 
-}
-
-.secondary-btn:hover{
-    background:#ddeaff;
-}
-
-.danger-btn{
-    background:#fff;
-    color:#dc2626;
-    border:1px solid #fecaca;
-    border-radius:8px; 
-    
-}
-
-.danger-btn:hover{
-    background:#fef2f2;
-}
-
-/* ===========================
-   CONNECTION STATUS
-=========================== */
-
-.status-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    display: inline-block;
-    margin-right: 8px;
-}
-
-.connected {
-    background-color: rgb(2, 147, 2);
-}
-
-.disconnected {
-    background-color: red;
+.upper-right .bottom input {
+    height: 2rem;
+    width: 18rem;
+    border-radius: 0.3rem;
+    font-size: 0.9rem;
+    padding: 0.3rem;
+    border: 1px solid black;
 }
 
 
-/* ===========================
-   ACTIONS
-=========================== */
 
-.card-actions{
-    display:flex;
-    gap:12px;
-    margin-top:20px;
+.settings-content .lower .lower-right {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    width: 50%;
+    height: 33vh;
+    background-color: #fff;
+    border: 1px solid #ccc;
+    overflow: auto;
 }
 
-/* ======================================================
-   DATABASE MANAGEMENT
-====================================================== */
-
-/* Backup Info */
-.backup-info{
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    padding:15px;
-    background:#f8fafc;
-    border:1px solid #e5e7eb;
-    border-radius:10px;
-    margin-bottom:20px;
+.lower-right .top{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 13vh;
+    font-size: 0.95rem;
+    padding: 0 1rem;
 }
 
-.backup-info span{
-    display:block;
-    color:#6b7280;
-    font-size:14px;
-    margin-bottom:4px;
-}
-
-.backup-info strong{
-    display:block;
-    font-size:15px;
-    font-weight:600;
-}
-
-/* Status */
-
-.healthy{
-    color:#16a34a;
-}
-
-.warning{
-    color:#d97706;
-}
-
-.overdue{
-    color:#dc2626;
+.upload-button {
+    display: flex;
+    background-color: #005da2;
+    border: 1px solid #005da2;
+    justify-content: center;
+    align-items: center;
+    border-radius: 0.3rem;
+    color: white;
+    width: 6rem;
+    height: 2rem;
+    font-size: 0.95rem;
 }
 
 
-/* ======================================================
-   STORAGE
-====================================================== */
-
-.db-storage{
-    background:#f8fafc;
-    border:1px solid #e5e7eb;
-    border-radius:10px;
-    padding:14px;
-    margin-bottom:20px;
+.lower-right .bottom{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 13vh;
+    font-size: 0.95rem;
+    padding: 0 1rem;
 }
 
-.db-storage-row{
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    font-size:14px;
-    color:#000000;
-    margin-bottom:10px;
+.lower-right .top button {
+    background-color: #005da2;
+    border: 1px solid #005da2;
+    border-radius: 0.3rem;
+    color: white;
+    width: 6rem;
+    height: 2rem;
 }
 
-.db-storage-track{
-    width:100%;
-    height:10px;
-    background:#dfe4ea;
-    border-radius:20px;
-    overflow:hidden;
+.lower-right .bottom button {
+    background-color: #005da2;
+    border: 1px solid #005da2;
+    border-radius: 0.3rem;
+    color: white;
+    width: 6rem;
+    height: 2rem;
 }
 
-.db-storage-fill{
-    height:100%;
-    width:0%;
-    background:#1565c0;
-    border-radius:20px;
-    transition:width .4s ease;
+.settings-content .lower {
+    display: flex;
+    gap: 0.3rem;
+    width: 100%;
+    height: 33vh;
+    margin-top: 0.2rem;
 }
 
-
-/* ======================================================
-   CREATE BACKUP BUTTON
-====================================================== */
-
-.backup-create{
-    display:flex;
-    justify-content:center;
-    margin:20px 0;
+.settings-content .upper .upper-left {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    width: 50%;
+    height: 33vh;
+    background-color: #fff;
+    border: 1px solid #ccc;
+    overflow: auto;
 }
 
-
-/* ======================================================
-   BACKUP MANAGEMENT
-====================================================== */
-
-.backup-controls{
-    display:grid;
-    grid-template-columns:180px 1fr 270px;
-    gap:18px;
-    align-items:end;
-    margin-top:20px;
+.upper-left .top{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 13vh;
+    font-size: 0.95rem;
+    padding: 0 1rem;
 }
 
-.backup-group{
-    display:flex;
-    flex-direction:column;
+.upper-left .bottom{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 13vh;
+    font-size: 0.95rem;
+    padding: 0 1rem;
 }
 
-.backup-group label{
-    font-size:14px;
-    font-weight:600;
-    color:#374151;
-    margin-bottom:6px;
+.upper-left .top input {
+    height: 2rem;
+    width: 18rem;
+    border-radius: 0.3rem;
+    font-size: 0.9rem;
+    padding: 0.3rem;
+    border: 1px solid black;
 }
 
-.backup-group select{
-    height:40px;
-    padding:0 12px;
-    border:1px solid #d1d5db;
-    border-radius:6px;
-    background:#fff;
-    font-size:14px;
-    cursor:pointer;
-    transition:.2s;
+.upper-left .bottom input {
+    height: 2rem;
+    width: 18rem;
+    border-radius: 0.3rem;
+    font-size: 0.9rem;
+    padding: 0.3rem;
+    border: 1px solid black;
 }
 
-.backup-group select:focus{
-    outline:none;
-    border-color:#1565c0;
+.upper-left .top button {
+    background-color: #005da2;
+    border: 1px solid #005da2;
+    border-radius: 0.3rem;
+    color: white;
+    width: 6rem;
+    height: 2rem;
 }
 
-
-/* ======================================================
-   ACTION BUTTONS
-====================================================== */
-
-.action-buttons div{
-    display:flex;
-    gap:10px;
+.upper-left .bottom button {
+    background-color: #005da2;
+    border: 1px solid #005da2;
+    border-radius: 0.3rem;
+    color: white;
+    width: 6rem;
+    height: 2rem;
 }
 
-.action-buttons button{
-    min-width:110px;
+.settings-content .lower .lower-left {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    width: 50%;
+    height: 33vh;
+    background-color: #fff;
+    border: 1px solid #ccc;
+    overflow: auto;
 }
 
-
-/* ======================================================
-   HORIZONTAL LINE
-====================================================== */
-
-.settings-card hr{
-    border:none;
-    border-top:1px solid #e5e7eb;
-    margin:20px 0;
+.lower-left .one{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 26vh;
+    font-size: 0.95rem;
+    padding: 0 1rem;
 }
 
-
-/* ======================================================
-   RESPONSIVE
-====================================================== */
-
-@media (max-width:900px){
-
-    .backup-info{
-        flex-direction:column;
-        align-items:flex-start;
-        gap:15px;
-    }
-
-    .backup-controls{
-        grid-template-columns:1fr;
-    }
-
-    .action-buttons div{
-        flex-wrap:wrap;
-    }
-
-    .action-buttons button{
-        flex:1;
-    }
-
-}
-/* ===========================
-   TABLE
-=========================== */
-
-.config-table{
-    width:100%;
-    border-collapse:collapse;
+.lower-left .one button {
+    background-color: #005da2;
+    border: 1px solid #005da2;
+    border-radius: 0.3rem;
+    color: white;
+    width: 6rem;
+    height: 2rem;
 }
 
-.config-table th{
-    background:#f8fafc;
-    text-align:left;
-    padding:14px;
-    border-bottom:1px solid #e5e7eb;
+.settings-content .bottom-content {
+    width: 100%;
+    height: 12.2vh;
+    padding-left: 0.7rem;
+    background-color: #fff;
+    border: 1px solid #ccc;
+    overflow: auto;
+    font-size: 0.95rem;
+    margin-top: 0.3rem;
 }
 
-.config-table td{
-    padding:16px 14px;
-    border-bottom:1px solid #e5e7eb;
+.settings-select {
+    height: 2rem;
+    width: 18rem;
+    border-radius: 0.3rem;
+    font-size: 0.9rem;
 }
-
-/* ===========================
-   RESPONSIVE
-=========================== */
-
-@media(max-width:1024px){
-
-    .settings-grid{
-        grid-template-columns:1fr;
-    }
-
-    .input-group{
-        flex-direction:column;
-    }
-
-    .card-actions{
-        flex-direction:column;
-    }
-
-    .backup-info{
-        flex-direction:column;
-        gap:12px;
-    }
-} 
 
 .about-container {
     width: 100%;
@@ -2292,7 +2020,7 @@ button:hover{
 }
 
 .about-text h2 {
-    color: #00a29f;
+    color: #005da2;
     margin-top: 1rem;
     margin-bottom: 0.1rem;
     font-size: 1.3rem;
@@ -2710,7 +2438,3 @@ button:hover{
     width: 240px !important;
   }
 }
-
-
-
-

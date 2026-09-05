@@ -39,8 +39,8 @@
             <span style="padding:0.65rem 0.6rem;background:#005da2;color:white;">Configure Connection</span>
 
             <div class="top">
-                <span >Select Connection Driver</span>
-                <select id="driverSelect" class="settings-select" style="margin-left:8rem;">
+                <span>Select Connection Driver</span>
+                <select class="settings-select" style="margin-left:8rem;">
                     <option>Siemens</option>
                     <option>Rockwell</option>
                 </select>
@@ -72,30 +72,16 @@
             <span style="padding:0.65rem 0.6rem;background:#005da2;color:white;">Configure Data</span>
 
             <div class="top">
-                <span>Upload Report DB Configuration</span>
-                <button id="uploadConfigBtn" style="margin-left:8.4rem;">Upload</button>
-                <input type="file" id="configFileInput" hidden accept=".xlsx,.xls">
+                <span>Upload PLC DB Configuration</span>
+                <button style="margin-left:8.4rem;">Upload</button>
+                <input type="file" hidden>
             </div>
 
             <div class="bottom">
-                <span>Download Report DB Configuration</span>
-                <button id="downloadConfigBtn" style="margin-left:2rem;">Download</button>
+                <span>Download PLC DB Configuration</span>
+                <button style="margin-left:2rem;">Download</button>
             </div>
 
-
-           <!--recipe configurations-->
-           
-           <div class="top">
-                <span>Upload Recipe DB configuration</span>
-                <button id="uploadConfigBtn" style="margin-left:8.4rem;">Upload</button>
-                <input type="file" id="configFileInput" hidden accept=".xlsx,.xls">
-           </div>
-           
-           <div class="bottom">
-               <span>Download Recipe DB configuration</span>
-               <button id="downloadConfigBtn" style="margin-left:2rem;">Download</button>
-           </div>
-      
         </div>
         {% endif %}
 
@@ -147,61 +133,5 @@ async function sendUpdateRequest(formData) {
     }
 }
 </script>
-
-
-
-<script>
-
-
-// ====================
-// Download Configuration
-// ====================
-
-document.getElementById("downloadConfigBtn")?.addEventListener("click", () => {
-    window.location.href = "/export-model-excel";
-});
-
-// Upload PLC DB Configuration
-
-document.getElementById("uploadConfigBtn").addEventListener("click", () => {
-    document.getElementById("configFileInput").click();
-});
-
-document.getElementById("configFileInput").addEventListener("change", async function () {
-
-    const file = this.files[0];
-
-    if (!file) return;
-
-    const server = document.getElementById("driverSelect").selectedIndex;
-
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("server", server);
-
-    try {
-        const response = await fetch("/upload-plc-db", {
-            method: "POST",
-            body: formData
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-            alert(result.message);
-        } else {
-            alert(result.message);
-        }
-
-    } catch (error) {
-        console.error(error);
-        alert("Upload failed");
-    }
-
-    this.value = "";
-});
-
-</script>
-
 
 {% endblock %}

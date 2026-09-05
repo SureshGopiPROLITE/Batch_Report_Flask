@@ -121,7 +121,9 @@
             <div class="chart-box">
                 <div style="display: flex; justify-content: space-between; margin-right: 0.5rem;">
                     <h3 class="chart-title">Production Calendar</h3>
-                    <select id="yearSelect" class="year-select"></select>
+                    <select id="yearSelect" class="year-select">
+                        <option value="2025">2025</option>
+                    </select>
                 </div>
                 <div id="calendarChart" class="calendar-chart"></div>
             </div>
@@ -179,37 +181,12 @@ toDate.addEventListener("change", () => {
     applyManual();
 });
 
-// hourSelect.addEventListener("change", () => {
-//     if (hourSelect.value !== "Custom") {
-//         fromDate.value = "";
-//         toDate.value = "";
-//     }
-    
-//     applyManual();
-// });
-
 hourSelect.addEventListener("change", () => {
-
     if (hourSelect.value !== "Custom") {
-
-        const now = new Date();
-        const from = new Date(now);
-
-        // Get selected hours (1 Hr -> 1, 4 Hr -> 4, etc.)
-        const hrs = parseInt(hourSelect.value);
-
-        from.setHours(now.getHours() - hrs);
-
-        // Format for datetime-local input
-        const format = (d) => {
-            const pad = n => String(n).padStart(2, "0");
-            return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        };
-
-        fromDate.value = format(from);
-        toDate.value = format(now);
+        fromDate.value = "";
+        toDate.value = "";
     }
-
+    
     applyManual();
 });
 
@@ -369,7 +346,7 @@ function fetchDashboard(from, to, hours) {
                     drawLineChart(d.line_chart);
                     drawRecipeChart(d.recipe_chart);
                     drawSiloChart(d.raw_material_chart);
-                    syncCalendarYear();
+                    drawCalendarChart(d.calendar_chart);
                 });
 
             }
@@ -399,152 +376,86 @@ function updateSummary(s) {
 function drawLineChart(data) {
 
     if (!data || data.length === 0) {
-        document.getElementById("lineChart").innerHTML =
+        document.getElementById('lineChart').innerHTML =
             "<p style='text-align:center;color:#888;'>No data available</p>";
         return;
     }
 
+    // 🔹 Extract unique TimeKeys and Plant Names
     const times = [...new Set(data.map(d => d.TimeKey))];
     const plants = [...new Set(data.map(d => d["Plant Name"]))];
 
-    // Hourly if TimeKey contains time
-    const isHourly = times[0].includes(" ");
-
-    // Check whether hourly data spans multiple dates
-    let multipleDates = false;
-
-    if (isHourly) {
-        const dates = [...new Set(times.map(t => t.split(" ")[0]))];
-        multipleDates = dates.length > 1;
-    }
-
     let table = new google.visualization.DataTable();
+    table.addColumn('date', 'Time');
 
-    if (isHourly)
-        table.addColumn("datetime", "Time");
-    else
-        table.addColumn("date", "Date");
+    // 🔹 One column per Plant → legend auto generated
+    plants.forEach(p => table.addColumn('number', p));
 
-    plants.forEach(p => table.addColumn("number", p));
+    // 🔹 Detect Hourly or Daily
+    const isHourly = times[0].includes(":");
 
     times.forEach(t => {
 
         let dateObj;
 
         if (isHourly) {
-
-            // Example:
-            // 2026-07-29 06:30:00
-            dateObj = new Date(t.replace(" ", "T"));
-
+            // Hourly → today + HH:00
+            const [hh] = t.split(":");
+            dateObj = new Date();
+            dateObj.setHours(parseInt(hh), 0, 0, 0);
         } else {
-
-            // Example:
-            // 2026-07-29
-
-            const [y, m, d] = t.split("-").map(Number);
-
-            // Create LOCAL date (avoids 5:30 AM)
-            dateObj = new Date(y, m - 1, d);
-
+            // Daily → yyyy-mm-dd
+            dateObj = new Date(t);
         }
 
         let row = [dateObj];
 
         plants.forEach(p => {
-
             const rec = data.find(
-                d => d.TimeKey === t &&
-                     d["Plant Name"] === p
+                d => d.TimeKey === t && d["Plant Name"] === p
             );
-
-            row.push(rec ? Number(rec.BatchCount) : null);
-
+            row.push(rec ? rec.BatchCount : 0);
         });
 
         table.addRow(row);
-
     });
 
-    // Select X-axis format
-    let xAxisFormat;
-
-    if (isHourly) {
-
-        if (multipleDates)
-            xAxisFormat = "dd MMM HH:mm";     // 29 Jul 06:30
-        else
-            xAxisFormat = "HH:mm";            // 06:30
-
-    } else {
-
-        xAxisFormat = "dd MMM yyyy";          // 29 Jul 2026
-
-    }
-
-    const chart = new google.visualization.LineChart(
-        document.getElementById("lineChart")
+    let chart = new google.visualization.LineChart(
+        document.getElementById('lineChart')
     );
 
     chart.draw(table, {
-
         height: 330,
-
-        curveType: "function",
-
+        curveType: 'function',
         pointSize: 4,
-
         dataOpacity: 0.9,
 
-        legend: {
-            position: "top"
-        },
+        legend: { position: 'top' },
 
         hAxis: {
-
-            format: xAxisFormat,
-
             slantedText: true,
-
             slantedTextAngle: 45,
-
-            textStyle: {
-                fontSize: 12
-            },
-
-            gridlines: {
-                count: -1
-            }
-
+            textStyle: { fontSize: 15 }
+            
         },
 
         vAxis: {
-
             title: "Batch Weight (Kg)",
-
-            viewWindow: {
-                min: 0
-            },
-
+            viewWindow: { min: 0 },
             titleTextStyle: {
                 italic: false,
                 fontSize: 20,
                 color: "#000"
             }
-
         },
 
-        tooltip: {
-            trigger: "both"
-        },
+        tooltip: { trigger: 'both' },
 
         chartArea: {
-            width: "82%",
-            height: "60%"
-        }
-
+            width: '80%',
+            height: '55%'
+        },
     });
-
 }
 
 /* =========================
@@ -587,181 +498,43 @@ function drawRecipeChart(data) {
 /* =========================
        CALENDAR CHART
 ========================= */
-
 function drawCalendarChart(data) {
 
-    const calendarDiv = document.getElementById("calendarChart");
-
-    calendarDiv.innerHTML = "";
-
     if (!data || data.length === 0) {
-        calendarDiv.innerHTML =
-            "<p style='text-align:center;padding-top:80px;color:#888;'>No data available</p>";
+        document.getElementById('calendarChart').innerHTML =
+            "<p style='text-align:center;color:#888;'>No data available</p>";
         return;
     }
 
     let table = new google.visualization.DataTable();
+    table.addColumn({ type: 'date', id: 'Date' });
+    table.addColumn({ type: 'number', id: 'Value' });
 
-    table.addColumn('date', 'Date');
-    table.addColumn('number', 'Value');
-
-    data.forEach(row => {
-
-        let d = new Date(row.date);
-
+    data.forEach(r => {
+        let d = new Date(r.date);
         table.addRow([
-            new Date(
-                d.getFullYear(),
-                d.getMonth(),
-                d.getDate()
-            ),
-            Number(row.value)
+            new Date(d.getFullYear(), d.getMonth(), d.getDate()),
+            r.value
         ]);
-
     });
 
-    let chart = new google.visualization.Calendar(calendarDiv);
+    let chart = new google.visualization.Calendar(document.getElementById('calendarChart'));
 
     chart.draw(table, {
         height: 220,
+        chartArea: {
+            width: '100%',
+            height: '100%'
+        },
         calendar: {
             cellSize: 20,
-            dayOfWeekLabel: {
-                fontSize: 12
-            },
-            monthLabel: {
-                fontSize: 14
-            }
-        }
-    });
-}
-
-/* =========================
-      LOAD AVAILABLE YEARS
-========================= */
-
-function loadAvailableYears(selectedYear = null) {
-
-    fetch("/calendar_years")   // <-- Match Flask route
-        .then(res => res.json())
-        .then(years => {
-
-            const yearSelect = document.getElementById("yearSelect");
-            yearSelect.innerHTML = "";
-
-            if (!years || years.length === 0) {
-
-                const currentYear = new Date().getFullYear();
-
-                const option = document.createElement("option");
-                option.value = currentYear;
-                option.textContent = currentYear;
-
-                yearSelect.appendChild(option);
-
-                loadCalendar(currentYear);
-                return;
-            }
-
-            years.forEach(year => {
-
-                const option = document.createElement("option");
-                option.value = year;
-                option.textContent = year;
-
-                yearSelect.appendChild(option);
-
-            });
-
-            if (selectedYear && years.includes(Number(selectedYear))) {
-                yearSelect.value = selectedYear;
-            } else {
-                yearSelect.value = years[0];   // Latest year
-            }
-
-            loadCalendar(yearSelect.value);
-
-        })
-        .catch(err => {
-            console.error("Failed to load years:", err);
-        });
-
-}
-
-/* =========================
-   SYNC YEAR WITH DATE
-========================= */
-
-function syncCalendarYear() {
-
-    const from = document.getElementById("fromDate").value;
-
-    if (!from) {
-        loadAvailableYears();
-        return;
-    }
-
-    const year = from.substring(0, 4);
-
-    loadAvailableYears(year);
-
-}
-
-/* =========================
-    LOAD CALENDAR DATA
-========================= */
-
-function loadCalendar(year) {
-
-    fetch(`/calendar_data?year=${year}`)
-        .then(response => response.json())
-        .then(data => {
-
-            console.log("Calendar Year:", year);
-            console.log(data);
-
-            drawCalendarChart(data);
-
-        })
-        .catch(error => {
-
-            console.error("Calendar Error:", error);
-
-        });
-
-}
-
-/* =========================
-      YEAR DROPDOWN
-========================= */
-
-document.addEventListener("DOMContentLoaded", function () {
-
-    syncCalendarYear();
-
-    document.getElementById("yearSelect").addEventListener("change", function () {
-
-        loadCalendar(this.value);
+            cellPadding: 3,
+            dayOfWeekLabel: { fontSize: 12 },
+            monthLabel: { fontSize: 14 }
+        },
 
     });
-
-});
-
-/* =========================
-    DATE CHANGE EVENTS
-========================= */
-
-document.getElementById("fromDate").addEventListener("change", function () {
-
-    syncCalendarYear();
-
-});
-
-document.getElementById("toDate").addEventListener("change", function () {
-
-    syncCalendarYear();
-
-});
+}
 
 /* =========================
           BAR CHART
