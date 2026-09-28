@@ -1,4 +1,4 @@
-from flask import (Flask,render_template,request,redirect,url_for,session,jsonify,abort,g,send_file,Response,)
+from flask import (Flask, render_template, request, redirect, url_for, session, jsonify, abort, g, send_file, Response,)
 from werkzeug.security import check_password_hash, generate_password_hash
 import io
 import json
@@ -23,7 +23,7 @@ from auth import authLog, authMac
 from config import sqliteCon
 from database import postgres
 
-from modules import (monitor,main,Report,analytics_module,graphs,recipewrite,db_management,)
+from modules import (monitor, main, Report, analytics_module, graphs, recipewrite, db_management,)
 from modules.monitor import log_file
 from modules.db_management import (
     get_database_management_data,
@@ -32,40 +32,14 @@ from modules.db_management import (
 app = Flask(__name__)
 app.secret_key = '4f3d6e9a5f4b1c8d7e6a2b3c9d0e8f1a5b7c2d4e6f9a1b3c8d0e6f2a9b1d3c4'
 
+
 def open_browser():
     webbrowser.open("http://127.0.0.1:5000/")
 
-# def is_activated():
-#     try:
-#         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
-#         df = pd.read_sql_query('SELECT * FROM "Info_db"',engineConRead)
-        
-#         activation_row = df.loc[df['Particulars'] == 'Activation_Key', 'Info']
-        
-#         if activation_row.empty:
-#             return False
-         
-#         activation_key = activation_row.values[0]
-#         return bool(activation_key and str(activation_key).strip())
-#     except Exception as e:
-#         print("Activation check error:", e)
-#         return False
 
 @app.route('/')
 def index():
-    # if not is_activated():
-    #     return render_template('activation.html')
     return redirect(url_for('home'))
-
-# @app.route('/activate_license', methods=['POST'])
-# def activate_license():
-#     data = request.get_json()
-#     license_key = data.get('licenseKey')
-
-#     result = authMac.mac_insert(license_key)
-#     success = result and "successfully updated" in result.lower()
-
-#     return jsonify(success=success, message=result)
 
 
 @app.route('/home')
@@ -74,6 +48,7 @@ def home():
         return redirect(url_for('dashboard', user=session['username'], role=session.get('role')))
     else:
         return redirect(url_for('dashboard'))
+
 
 @app.route('/dashboard')
 def dashboard():
@@ -88,7 +63,6 @@ def get_dashboard():
         hours = request.args.get("hours")
         print(f" Dashboard Filters → Hours: {hours}, Start: {start_time}, End: {end_time}")
 
-        
         if hours and hours != "Custom":
             print("⚠ No valid start/end time provided, using hour-based filter")
             s_time = None
@@ -144,13 +118,13 @@ def get_available_years():
 
     return df["year"].tolist()
 
+
 @app.route("/calendar_years")
 def calendar_years():
 
     years = get_available_years()
 
     return jsonify(years)
-
 
 
 @app.route("/calendar_data")
@@ -190,9 +164,11 @@ def calendar_data():
         engineConRead.close()
         engineConWrite.close()
 
+
 @app.route('/logs')
 def logs():
     return render_template('logs.html')
+
 
 @app.route("/api/logs", methods=["GET"])
 def get_logs():
@@ -203,17 +179,20 @@ def get_logs():
     except FileNotFoundError:
         return jsonify({"logs": []})
 
+
 @app.route("/api/logs/clear", methods=["POST"])
 def clear_logs():
     open(log_file, "w").close()
     return jsonify({"status": "cleared"})
 
+
 @app.route('/recipe')
 def recipe():
     user_logged_in = 'username' in session
     user_role = session.get("role")  # <-- Get role from session
-    
-    return render_template('recipe.html',   user_logged_in=user_logged_in, role = user_role)
+
+    return render_template('recipe.html', user_logged_in=user_logged_in, role=user_role)
+
 
 @app.route("/api/material/<silo_no>", methods=["GET"])
 def get_material_by_silo(silo_no):
@@ -226,6 +205,7 @@ def get_material_by_silo(silo_no):
     else:
         return jsonify({"success": False}), 404
 
+
 @app.route("/api/recipes_data/get_recipes", methods=["GET"])
 def get_recipes():
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
@@ -233,6 +213,7 @@ def get_recipes():
     data = [{"id": row[0], "name": row[1]} for row in cursorRead.fetchall()]
     conn.close()
     return jsonify(data)
+
 
 @app.route("/api/recipes_data/add_recipe", methods=["POST"])
 def add_recipe():
@@ -262,7 +243,6 @@ def add_recipe():
         )
         conn.commit()
 
-    
         cursorWrite.execute("""
             INSERT INTO "recipeData"
                 ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "Category", "CoarseSpeed", "FineSpeed")
@@ -280,8 +260,6 @@ def add_recipe():
         conn.close()
 
 
-
-
 @app.route("/api/recipes_data/delete_recipe/<string:name>", methods=["DELETE"])
 def delete_recipe(name):
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
@@ -289,6 +267,7 @@ def delete_recipe(name):
     conn.commit()
     conn.close()
     return jsonify({"success": True})
+
 
 @app.route("/api/recipes_data/rename_recipe", methods=["PUT"])
 def rename_recipe():
@@ -348,19 +327,15 @@ def get_recipe_table(category):
         FROM "recipeData" r
         LEFT JOIN "MaterialData" m ON r."SiloNo" = m."SiloNo"
         WHERE r."Category" = %s
-        
+
     """
-    # query = """
-    #     SELECT "Index", SiloNo, MaterialName, SetWeight, FineWeight, Tolerance, CoarseSpeed, FineSpeed 
-    #     FROM recipeData
-    #     WHERE Category = ?
-    #     """
 
     cursorRead.execute(query, (category,))
     data = cursorRead.fetchall()
     cols = [desc[0] for desc in cursorRead.description]
     conn.close()
     return jsonify([dict(zip(cols, row)) for row in data])
+
 
 @app.route("/api/recipes_data/add_row", methods=["POST"])
 def add_row():
@@ -377,9 +352,7 @@ def add_row():
 
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-    # --------------------------------------------------------------
     # 1 Check if Silo exists in MaterialData
-    # --------------------------------------------------------------
     cursorRead.execute('SELECT "MaterialName" FROM "MaterialData" WHERE "SiloNo"=%s', (silo,))
     mrow = cursorRead.fetchone()
 
@@ -389,12 +362,10 @@ def add_row():
 
     material_name = mrow[0]
 
-    # --------------------------------------------------------------
     # 2 Check if SAME SiloNo already exists in recipeData under SAME Category
-    # --------------------------------------------------------------
     cursorRead.execute("""
-        SELECT COUNT(*) 
-        FROM "recipeData" 
+        SELECT COUNT(*)
+        FROM "recipeData"
         WHERE "SiloNo" = %s AND "Category" = %s
     """, (silo, category))
 
@@ -404,13 +375,7 @@ def add_row():
         conn.close()
         return jsonify({"success": False, "error": "silo_already_exists"}), 409
 
-    # --------------------------------------------------------------
     # 3 Insert new recipe row
-    # --------------------------------------------------------------
-    # NOTE: the original query had 8 columns but only 6 "?" placeholders,
-    # and the params tuple's column order didn't line up with the column
-    # list (Category was last in the params but 6th in the columns).
-    # Both are fixed below.
     try:
         cursorWrite.execute("""
             INSERT INTO "recipeData"
@@ -438,6 +403,7 @@ def add_row():
     finally:
         conn.close()
 
+
 @app.route('/api/recipes/export', methods=['POST'])
 def export_recipe_data():
     try:
@@ -452,7 +418,7 @@ def export_recipe_data():
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
         query = """
-            SELECT 
+            SELECT
                 r."SiloNo",
                 COALESCE(m."MaterialName", r."MaterialName") AS "MaterialName",
                 r."SetWeight",
@@ -490,6 +456,7 @@ def export_recipe_data():
     except Exception as e:
         print(" Export Recipe Error:", e)
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route("/api/recipes/import", methods=["POST"])
 def import_recipe_excel():
@@ -541,9 +508,6 @@ def import_recipe_excel():
                 conn.rollback()
                 return jsonify({"success": False, "error": f"Silo not found: {silo}"}), 400
 
-            # NOTE: the original query's VALUES clause was commented out
-            # entirely (# VALUES (?, ?, ?, ?, ?, ?, ?, ?)), so this insert
-            # never actually wrote a row. Restored and converted to %s.
             cursorWrite.execute("""
                 INSERT INTO "recipeData"
                     ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed", "Category")
@@ -566,6 +530,7 @@ def import_recipe_excel():
         print(" Import Error:", e)
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.route("/api/recipes_data/update_row/<int:index>", methods=["PUT"])
 def update_row(index):
     data = request.json
@@ -578,9 +543,7 @@ def update_row(index):
     CoarseSpeed = data.get("CoarseSpeed")
     FineSpeed = data.get("FineSpeed")
 
-    # ------------------------------
     # Validate required fields
-    # ------------------------------
     if not silo or not category:
         return jsonify({"success": False, "error": "SiloNo and Category required"}), 400
 
@@ -589,9 +552,7 @@ def update_row(index):
 
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-    # --------------------------------------------------------------
     # 1 Check if Silo exists in MaterialData
-    # --------------------------------------------------------------
     cursorRead.execute('SELECT "MaterialName" FROM "MaterialData" WHERE "SiloNo" = %s', (silo,))
     mrow = cursorRead.fetchone()
 
@@ -601,17 +562,13 @@ def update_row(index):
 
     material_name = mrow[0]
 
-    # --------------------------------------------------------------
     # 2 Check that Index exists in recipeData
-    # --------------------------------------------------------------
     cursorRead.execute('SELECT COUNT(*) FROM "recipeData" WHERE "Index"=%s', (index,))
     if cursorRead.fetchone()[0] == 0:
         conn.close()
         return jsonify({"success": False, "error": "row_not_found"}), 404
 
-    # --------------------------------------------------------------
     # 3 Duplicate Silo check (same recipe & category)
-    # --------------------------------------------------------------
     cursorRead.execute("""
         SELECT COUNT(*) FROM "recipeData"
         WHERE "SiloNo" = %s
@@ -623,20 +580,18 @@ def update_row(index):
         conn.close()
         return jsonify({"success": False, "error": "silo_already_exists"}), 409
 
-    # --------------------------------------------------------------
     # 4 Perform the UPDATE
-    # --------------------------------------------------------------
     try:
         cursorWrite.execute("""
             UPDATE "recipeData"
-            SET "SiloNo" = %s, 
-                "Category" = %s, 
-                "MaterialName" = %s, 
-                "SetWeight" = %s, 
-                "FineWeight" = %s, 
+            SET "SiloNo" = %s,
+                "Category" = %s,
+                "MaterialName" = %s,
+                "SetWeight" = %s,
+                "FineWeight" = %s,
                 "Tolerance" = %s,
                 "CoarseSpeed" = %s,
-                "FineSpeed" = %s                        
+                "FineSpeed" = %s
             WHERE "Index" = %s
         """, (
             silo,
@@ -671,7 +626,6 @@ def delete_row(index):
     conn.commit()
 
     # STEP 2: Read all remaining rows ordered by old Index
-   
     cursorRead.execute('SELECT ctid FROM "recipeData" ORDER BY "Index" ASC')
     rows = cursorRead.fetchall()
 
@@ -690,14 +644,12 @@ def delete_row(index):
     return jsonify({"success": True})
 
 
-
-
 @app.route('/report')
 def report():
     user_logged_in = 'username' in session
-    username = session.get("username")     # <-- ADD THIS
-    user_role = session.get("role") 
-    
+    username = session.get("username")
+    user_role = session.get("role")
+
     return render_template('report.html', user_logged_in=user_logged_in, username=username, role=user_role)
 
 
@@ -761,30 +713,6 @@ def api_report_data():
             "success": False,
             "error": str(e)
         }), 500
-    
-
-# @app.route("/api/plc_data", methods=["POST"]) 
-# def get_plc_data():
-#     """Fetch PLC data for a given BatchNo"""
-#     try:
-#         data = request.get_json()
-#         batch_no = data.get("batch_no")
-        
-
-#         if not batch_no:
-#             return jsonify({"success": False, "error": "BatchNo missing"}), 400
-
-#         df = main.plc_data_process(batch_no)
-
-        
-#         # Return as JSON
-#         return jsonify({
-#             "success": True,
-#             "data": df.to_dict(orient="records")
-#         })
-
-#     except Exception as e:
-#         return jsonify({"success": False, "error": str(e)})
 
 
 # ===============================================================
@@ -809,7 +737,8 @@ def api_plc_data():
     except Exception as e:
         print(f" API Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
-    
+
+
 def get_column_settings():
     """
     Returns True if CoarseSpeed and FineSpeed
@@ -831,6 +760,8 @@ def get_column_settings():
     except Exception as e:
         print(" get_column_settings error:", e)
         return True
+
+
 # ===============================================================
 #  PDF REPORT DOWNLOAD
 # ===============================================================
@@ -862,6 +793,7 @@ def api_plc_data_pdf():
         print(f" PDF Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 # ===============================================================
 #  EXCEL REPORT DOWNLOAD
 # ===============================================================
@@ -892,7 +824,8 @@ def api_plc_data_excel():
     except Exception as e:
         print(f" Excel Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
-    
+
+
 @app.route('/api/export_data', methods=['POST'])
 def api_export_data():
     try:
@@ -904,8 +837,7 @@ def api_export_data():
         print(f" Export requested → Hours: {hours}, From: {from_time}, To: {to_time}")
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
-        
-        #  Use your existing logic or Sqlite.showBatch equivalent
+
         df = sqliteCon.data_batch(conn, hours, from_time, to_time, engineConRead)
 
         if df is None or df.empty:
@@ -920,7 +852,6 @@ def api_export_data():
         # Create dynamic file name
         filename = f"Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
-        #  Return correct MIME type
         return send_file(
             output,
             as_attachment=True,
@@ -932,10 +863,12 @@ def api_export_data():
         print(f" Export Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.route('/analytics')
 def analytics():
-    
+
     return redirect(url_for('analytics_tab', tab='data'))
+
 
 @app.route("/api/analytics_data", methods=["POST"])
 def analytics_data():
@@ -951,7 +884,7 @@ def analytics_data():
       }
     """
     try:
-        
+
         payload = request.get_json() or {}
         hours = payload.get("hours", "1 Hr")
         from_time = payload.get("from_time")
@@ -961,9 +894,7 @@ def analytics_data():
         if hours == "Custom":
             if not from_time or not to_time:
                 return jsonify({"success": False, "error": "Custom range requires from_time and to_time"}), 400
-            # optional: validate ISO format
             try:
-                # This only validates format; your show_data handles DB queries
                 datetime.fromisoformat(from_time)
                 datetime.fromisoformat(to_time)
             except Exception:
@@ -1000,9 +931,9 @@ def analytics_data():
         return jsonify({"success": True, "data": data, "total_weight": total_tons})
 
     except Exception as e:
-        # keep message minimal for production; full error helps during development
         return jsonify({"success": False, "error": str(e)}), 500
-    
+
+
 @app.route("/api/export_data_analytics", methods=["POST"])
 def export_data_analytics():
     """
@@ -1065,7 +996,8 @@ def export_data_analytics():
     except Exception as e:
         print(f" Export error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
-    
+
+
 @app.route("/api/plc_data_analytics", methods=["POST"])
 def plc_data_analytics():
     try:
@@ -1095,7 +1027,7 @@ def plc_data_analytics():
         df_pivot = sqliteCon.get_silo_pivot(df, category)
         if df_pivot is None or df_pivot.empty:
             return jsonify({"success": True, "data": []})
-        
+
         #  Fixed column order
         col_order = [
             "Category", "SetWeight", "ActualWeight", "FineWeight",
@@ -1113,7 +1045,8 @@ def plc_data_analytics():
     except Exception as e:
         print(f" Error in /api/plc_data_analytics: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
-    
+
+
 @app.route("/api/plc_data_analytics_excel", methods=["POST"])
 def plc_data_analytics_EXCEL():
     try:
@@ -1176,11 +1109,11 @@ def plc_data_analytics_EXCEL():
 def analytics_dashboard():
     try:
         print(" Starting Dashboard...")
-        
+
         dashboard_thread = threading.Thread(
-                    target=analytics_module.run_dashboard,
-                    daemon=True
-                )
+            target=analytics_module.run_dashboard,
+            daemon=True
+        )
         dashboard_thread.start()
         server_host = request.host.split(":")[0]
         dash_url = f"http://{server_host}:8050"
@@ -1218,7 +1151,7 @@ def get_analytics_graph_data():
 
         if df is None or df.empty:
             return jsonify({"error": "No data found"})
-        
+
         df_diff = sqliteCon.process_batch_data(df)
 
         if df_diff is None or df_diff.empty:
@@ -1240,16 +1173,16 @@ def get_analytics_graph_data():
 @app.route('/analytics/<tab>')
 def analytics_tab(tab):
     user_logged_in = 'username' in session
-    username = session.get("username")     # <-- ADD THIS
-    user_role = session.get("role") 
+    username = session.get("username")
+    user_role = session.get("role")
     if tab == 'graph':
         return render_template('analyticsgraph.html', tab='graph', user_logged_in=user_logged_in, username=username, role=user_role)
     return render_template('analyticsdata.html', tab='data', user_logged_in=user_logged_in, username=username, role=user_role)
 
 
-#----------------------------------
+# ----------------------------------
 # settings page
-#----------------------------------
+# ----------------------------------
 @app.route('/settings')
 def settings():
     user_logged_in = 'username' in session
@@ -1262,6 +1195,7 @@ def settings():
         role=user_role,
         db_data=db_data
     )
+
 
 @app.route("/api/settings/update_email", methods=["POST"])
 def update_email():
@@ -1286,6 +1220,8 @@ def update_email():
             "success": False,
             "error": str(e)
         })
+
+
 @app.route("/api/settings/save_column_settings", methods=["POST"])
 def save_column_settings():
     try:
@@ -1321,13 +1257,14 @@ def save_column_settings():
 
 @app.route("/api/settings/get_column_settings", methods=["GET"])
 def api_get_column_settings():
-    return jsonify({"success": True, "show_cspeed_fspeed": get_column_settings()})    
+    return jsonify({"success": True, "show_cspeed_fspeed": get_column_settings()})
+
 
 @app.route("/api/settings/update_report", methods=["POST"])
 def update_report():
     try:
         report_name = request.form.get("report_name")
-        
+
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
         # 1 - Update report name
@@ -1338,7 +1275,7 @@ def update_report():
             )
             conn.commit()
 
-        # 2️ - Save uploaded logo into data_files/
+        # 2 - Save uploaded logo into data_files/
         if "logo" in request.files:
             logo = request.files["logo"]
 
@@ -1355,7 +1292,8 @@ def update_report():
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
-    
+
+
 @app.route('/download-RecipeTag', methods=['GET'])
 def download_RecipeTag():
     try:
@@ -1364,7 +1302,7 @@ def download_RecipeTag():
 
         # Read table into DataFrame
         df = pd.read_sql_query(
-            'SELECT * FROM "RecipeTagName"',  # Replace with your table name
+            'SELECT * FROM "RecipeTagName"',
             conn
         )
 
@@ -1384,8 +1322,8 @@ def download_RecipeTag():
         )
 
     except Exception as e:
-        return {"error": str(e)}, 500    
-    
+        return {"error": str(e)}, 500
+
 
 @app.route('/upload-RecipeTag', methods=['POST'])
 def upload_RecipeTag():
@@ -1426,7 +1364,7 @@ def upload_RecipeTag():
         return jsonify({
             "success": False,
             "message": f"Error reading Excel file: {str(e)}"
-        }), 500   
+        }), 500
 
 
 @app.route('/api/backup/custom', methods=['GET'])
@@ -1476,14 +1414,11 @@ def create_custom_backup_route():
             "success": False,
             "message": str(e)
         }), 500
-    
 
 
 @app.route('/export-model-excel', methods=['GET'])
 def model_excel():
-    # cursorRead, cursorWrite, engineConRead, engineConWriten, conn = Sqlite.sqlite()
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
-
 
     try:
         query = 'SELECT * FROM "Data"'
@@ -1544,12 +1479,10 @@ def upload_plc_db():
 
         # Driver index from frontend
         server = int(request.form.get("server", 0))
-      
+
         # Read Excel
         dfPlcExcel = pd.read_excel(file)
 
-
-        # Siemens
         if server == 2:
             dfPlcExcel["ns"] = dfPlcExcel["ns"].astype(str)
 
@@ -1607,18 +1540,20 @@ def upload_plc_db():
 def is_admin():
     return session.get("role") in ["admin", "superadmin"]
 
+
 @app.route('/stocks')
 def stocks():
     user_logged_in = 'username' in session
-    username = session.get("username")     # <-- ADD THIS
-    user_role = session.get("role")        # <-- ADD THIS
-    
+    username = session.get("username")
+    user_role = session.get("role")
+
     return render_template(
         'stocks.html',
         user_logged_in=user_logged_in,
-        user=username,                     # <-- SEND user
-        role=user_role                     # <-- SEND role
+        user=username,
+        role=user_role
     )
+
 
 #  API Route — returns live data for the Stocks table
 @app.route("/api/stocks", methods=["GET"])
@@ -1633,13 +1568,13 @@ def get_stocks_data():
         df = pd.read_sql(query, conn)
 
         # REMOVE rows where SiloNo is NULL, empty string, or '-'
-        df = df[df["SiloNo"].notna()]              # drop NULL
-        df = df[df["SiloNo"].astype(str).str.strip() != ""]   # drop empty string
-        df = df[df["SiloNo"].astype(str).str.strip() != "-"]  # drop '-'
+        df = df[df["SiloNo"].notna()]
+        df = df[df["SiloNo"].astype(str).str.strip() != ""]
+        df = df[df["SiloNo"].astype(str).str.strip() != "-"]
 
         # Convert SiloNo to integer safely
         df["SiloNo"] = pd.to_numeric(df["SiloNo"], errors="coerce")
-        df = df.dropna(subset=["SiloNo"])  # drop rows that still could not convert
+        df = df.dropna(subset=["SiloNo"])
         df["SiloNo"] = df["SiloNo"].astype(int)
 
         # Fill remaining NaN values
@@ -1649,10 +1584,8 @@ def get_stocks_data():
         df.reset_index(drop=True, inplace=True)
         df.insert(0, "Id", df.index + 1)
 
-        # Sort descending
         df_sorted = df.sort_values(by="SiloNo", ascending=True)
 
-        # Convert to records
         return jsonify({
             "success": True,
             "records": df_sorted.to_dict(orient="records")
@@ -1667,6 +1600,7 @@ def get_stocks_data():
             conn.close()
         except:
             pass
+
 
 # Add new stock
 @app.route("/api/stocks/add", methods=["POST"])
@@ -1693,6 +1627,7 @@ def add_stock():
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+
 
 # Update existing stock
 @app.route("/api/stocks/update/<string:old_silono>", methods=["PUT"])
@@ -1722,6 +1657,7 @@ def update_stock(old_silono):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+
 # Delete stock by SiloNo
 @app.route("/api/stocks/delete/<string:silono>", methods=["DELETE"])
 def delete_stock(silono):
@@ -1737,6 +1673,7 @@ def delete_stock(silono):
     finally:
         conn.close()
 
+
 @app.route('/api/stocks/export', methods=['POST'])
 def export_material_data():
     try:
@@ -1744,7 +1681,6 @@ def export_material_data():
 
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-        # Read table into pandas
         query = """
             SELECT "SiloNo", "MaterialName", "MaterialCode", "OperatorName", "TotalExtracted"
             FROM "MaterialData"
@@ -1754,7 +1690,6 @@ def export_material_data():
         if df is None or df.empty:
             return jsonify({"success": False, "error": "No data available to export"}), 400
 
-        # Prepare Excel in memory
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df.to_excel(writer, index=False, sheet_name='MaterialData')
@@ -1791,12 +1726,11 @@ def super_admin():
         axis=1
     )
 
-    # Hide real DB Id (optional: drop it from UI)
+    # Hide real DB Id
     df = df.drop(columns=['Id'])
 
     table_html = df.to_html(classes='table table-striped', index=False, escape=False, table_id='inventory-table')
     return render_template('super_admin.html', table=table_html, user_logged_in=user_logged_in)
-
 
 
 # --------------------------------- LOGIN ------------------------------------
@@ -1806,7 +1740,7 @@ def login():
     username = request.form["username"]
     password = request.form["password"]
 
-    user = authLog.get_user(username)  
+    user = authLog.get_user(username)
     # user = (id, username, password_hash, role, user_access, is_active, last_login)
     print(user)
 
@@ -1901,7 +1835,7 @@ def add_user():
     role = data.get("role")
     print("Adding user:", username, "with role:", role)
 
-    if not username or not role :
+    if not username or not role:
         return jsonify(success=False, error="Missing fields")
 
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
@@ -1920,8 +1854,6 @@ def add_user():
         return jsonify(success=True)
 
     except psycopg2.IntegrityError:
-        # Was: except sqlite3.IntegrityError — psycopg2 raises its own
-        # IntegrityError (e.g. UniqueViolation) for constraint conflicts.
         conn.rollback()
         conn.close()
         return jsonify(success=False, error="User already exists")
@@ -1973,91 +1905,57 @@ def delete_user():
     conn.commit()
     conn.close()
 
-    return jsonify(success=True)  
+    return jsonify(success=True)
+
+
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('home'))
 
-# ==========================================
-# Global PLC Status
-# ==========================================
-plc_connected = False
-AUTO_DRIVER = 1   # 1 = Siemens, 2 = Allen Bradley
-
 
 # ==========================================
-# Start PLC
+# PLC Connect / Disconnect / Status
 # ==========================================
-
 @app.route('/start_plc', methods=['POST'])
 def start_plc():
+    data = request.get_json(silent=True) or {}
+    try:
+        driver = int(data.get('driver'))
+    except (TypeError, ValueError):
+        return jsonify(success=False, status="disconnected", message="Invalid driver"), 200
 
-    global plc_connected
+    station_ip = (data.get('station_ip') or "").strip() or None
+    success, message = monitor.start_monitoring(driver, station_ip)
 
-    server = request.get_json()
-    driver = int(server.get('driver'))
-
-    print("Selected Driver:", driver)
-
-    if not monitor.is_running():
-
-        print(" Starting PLC monitoring...")
-
-        monitor.start_monitoring(driver)
-
-        plc_connected = True
-
-        return jsonify(
-            success=True,
-            status="connected",
-            message="PLC Connected Successfully"
-        )
-
-    return jsonify(
-        success=True,
-        status="connected",
-        message="PLC Monitoring Already Running"
-    )
+    return jsonify(success=success,
+                   status="connected" if success else "disconnected",
+                   message=message), 200
 
 
-
-# ==========================================
-# Stop PLC
-# ==========================================
 @app.route('/stop_plc', methods=['POST'])
 def stop_plc():
+    if not monitor.is_running():
+        return jsonify(success=False, status="disconnected",
+                       message=monitor.MSG_NOT_CONNECTED), 200
 
-    global plc_connected
+    monitor.stop_monitoring()
+    return jsonify(success=True, status="disconnected",
+                   message="PLC Disconnected Successfully"), 200
 
-    if monitor.is_running():
 
-        print(" Stopping PLC monitoring...")
-
-        monitor.stop_monitoring()
-
-    plc_connected = False
-
-    return jsonify(
-        success=True,
-        status="disconnected",
-        message="PLC Disconnected Successfully"
-    )
-
-# ==========================================
-# PLC Status
-# ==========================================
 @app.route('/plc_status')
 def plc_status():
+    return jsonify(status="connected" if monitor.is_running() else "disconnected")
 
-    return jsonify({
-        "status": "connected"
-                  if monitor.is_running()
-                  else "disconnected"
-    })
-    
-# @app.route('/save_Plc')
-# def save_Plc():
+
+@app.route('/api/settings/get_plc_config')
+def get_plc_config():
+    try:
+        node = monitor.get_saved_node()
+        return jsonify(station_ip=node, driver=monitor.guess_driver(node))
+    except Exception:
+        return jsonify(station_ip="", driver=1)
 
 
 @app.route('/upload_excel', methods=['POST'])
@@ -2102,7 +2000,8 @@ def openXl():
             "status": "error",
             "message": f"Error reading Excel file: {str(e)}"
         }), 500
-    
+
+
 @app.route('/download_recipe', methods=['POST'])
 def download_recipe():
     try:
@@ -2116,13 +2015,14 @@ def download_recipe():
         if not result.get("success", False):
             return jsonify(result), 400
         return jsonify(result), 200
-    
+
     except Exception as e:
         print(e)
         return jsonify({
             "success": False,
             "message": str(e)
         }), 500
+
 
 @app.route('/api/settings/set_driver', methods=['POST'])
 def set_driver():
@@ -2135,36 +2035,21 @@ def set_driver():
 def forbidden(e):
     return render_template('403.html'), 403
 
+
 @app.before_request
 def load_user():
     g.user = session.get('username')
     g.role = session.get('role')
 
+
 @app.context_processor
 def inject_user():
     return dict(user=session.get('username'), role=session.get('role'))
 
-# if __name__ == '__main__':
-#     app.run(debug=True)
-
-
 
 if __name__ == "__main__":
-
-    try:
-
-        if not monitor.is_running():
-
-            print("  Starting PLC Monitoring...")
-
-            monitor.start_monitoring(1)   # Siemens
-
-            plc_connected = True
-
-    except Exception as e:
-
-        print(" PLC Start Error:", e)
-
-        plc_connected = False
+    # Try once at startup. If the PLC is off or unreachable it just stays
+    # "Disconnected" (see plc_monitor.log) and the user can press Connect later.
+    monitor.start_auto_connect()
 
     app.run(debug=True, use_reloader=False)

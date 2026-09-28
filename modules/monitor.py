@@ -1,70 +1,53 @@
-from http import server
-import pandas as pd
-import asyncio
-import logging
-from database import postgres
-from modules import main
-from config import sqliteCon
-from plc_connection import pylogix, snap7_plc
 import os
+import socket
 import logging
-from datetime import datetime
 import threading
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
-# Generate Summary
+
+import pandas as pd
+
+from database import postgres
+from plc_connection import pylogix, snap7_plc
 from modules.batch_summary import calculate_batch_summary
 
 # === Logging Setup ===
-
-# Use an ABSOLUTE path based on this file's location, not the process's
-# current working directory. If your app is started from a different
-# folder (systemd, a service wrapper, a different shell, Flask's
-# debug reloader subprocess, etc.), a bare "plc_monitor.log" can end up
-# being created somewhere you're not looking — this fixes that.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 log_file = os.path.join(BASE_DIR, "plc_monitor.log")
 
 root_logger = logging.getLogger()
-
-# Guard against adding the handler twice. If this module gets imported
-# more than once (Flask's debug=True reloader runs your script in a
-# child process and can re-trigger this), you'd otherwise end up with
-# 2+ RotatingFileHandlers writing the same line twice, or — depending
-# on setup order — handlers pointing at stale state.
 if not any(isinstance(h, RotatingFileHandler) for h in root_logger.handlers):
     handler = RotatingFileHandler(log_file, maxBytes=50 * 1024 * 1024, backupCount=3)
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
     root_logger.addHandler(handler)
 
 root_logger.setLevel(logging.INFO)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
-
-# Sanity check on startup — confirms the handler can actually write,
-# and tells you exactly where the file is on disk.
 logging.info(f"Logging initialized -> {log_file}")
 print(f"[logging] writing to: {log_file}")
+# Silence noisy third-party libraries (PDF font subsetting, etc.)
+for noisy in ("fontTools", "fontTools.subset", "fontTools.ttLib", "PIL", "matplotlib"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
+# === PLC connection settings ===
+S7_PORT = 102          # Siemens S7comm
+ENIP_PORT = 44818      # Rockwell EtherNet/IP
+MAX_FAILED_CYCLES = 3  # consecutive failed cycles before we declare the PLC lost
 
+MSG_NOT_READY = ("PLC is not ready to connect. "
+                 "Check power, cable/Wi-Fi and the Station IP.")
+MSG_NOT_CONNECTED = "PLC is not connected"
 
-# === Global Variables ===
-plc_running = False
-
-
-latest_data = {}  # Stores most recent PLC data for frontend polling
-
-
-# === Shared State (thread-safe) ===
-stop_event = threading.Event() #Used to stop monitoring safely.
-
-data_lock = threading.Lock() #Prevents multiple threads from modifying data simultaneously.
+# === Shared state (thread-safe) ===
+stop_event = threading.Event()
+data_lock = threading.Lock()
 db_write_lock = threading.Lock()
+start_lock = threading.Lock()
 
 latest_data = {}
 trigger_dataframes = {}
-plc_thread = None  # set by start_monitoring(); inspect with is_running()
+plc_thread = None
 
 
-# === Helpers for shared state ===
 def get_latest_data():
     with data_lock:
         return latest_data.copy()
@@ -83,8 +66,8 @@ def df_split(dfPlcdb):
             unique_triggers = dfPlcdb['Trigger'].dropna().unique()
             df_trigger = dfPlcdb[dfPlcdb["Name"].isin(unique_triggers)]
 
-            for tag in unique_triggers:
-                with data_lock:
+            with data_lock:
+                for tag in unique_triggers:
                     trigger_dataframes[tag] = dfPlcdb[dfPlcdb['Trigger'] == tag]
 
             return dfplcdb_Periodic, df_trigger
@@ -94,130 +77,175 @@ def df_split(dfPlcdb):
         logging.error(f"Error in df_split: {e}")
         return dfPlcdb, pd.DataFrame()
 
-# === Entry points to call from your Flask routes ===
+
+# === DB helpers ===
+def load_plc_tables():
+    cr = cw = er = ew = conn = None
+    try:
+        cr, cw, er, ew, conn = postgres.postgres()
+        dfInfo = pd.read_sql_query('SELECT * FROM "Info_db";', er)
+        dfPlcdb = pd.read_sql_query('SELECT * FROM "Data";', er)
+        return dfInfo, dfPlcdb
+    finally:
+        postgres.close_postgres(cr, cw, er, ew, conn)
+
+
+def get_saved_node():
+    dfInfo, _ = load_plc_tables()
+    return str(dfInfo.loc[0, "Info"]).strip()
+
+
+# === Connection helpers ===
+def guess_driver(node):
+    """'ip,rack,slot' -> Siemens (1), plain IP -> Rockwell (2)."""
+    return 1 if str(node).count(',') == 2 else 2
+
+
+def parse_node(server, node):
+    parts = [p.strip() for p in str(node).split(',')]
+    if server == 1:
+        if len(parts) != 3:
+            raise ValueError('Siemens format must be "ip,rack,slot" e.g. 192.168.0.1,0,1')
+        return parts[0], int(parts[1]), int(parts[2])
+    return parts[0], None, None
+
+
+def is_plc_reachable(ip, server, timeout=2.0):
+    port = S7_PORT if server == 1 else ENIP_PORT
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _open_plc(server, node, dfPlcdb):
+    """Connect + liveness check. Returns plc object or raises."""
+    plc = None
+    try:
+        if server == 1:
+            ip, rack, slot = parse_node(1, node)
+            plc = snap7_plc.snap7Connect(ip, rack, slot)
+            plc.get_cpu_state()
+            alive = snap7_plc.lifeCounter(plc, dfPlcdb)
+        else:
+            plc = pylogix.connectABPLC(node)
+            result = plc.GetPLCTime()
+            if result.Status != "Success":
+                raise ConnectionError(result.Status)
+            alive = pylogix.lifeCounter(plc, dfPlcdb)
+
+        if not alive:
+            raise ConnectionError("life counter check failed")
+        return plc
+    except Exception:
+        if plc:
+            try:
+                plc.disconnect()
+            except Exception:
+                pass
+        raise
+
+
 def is_running():
-    """True if the monitoring thread is alive and hasn't been told to stop."""
     return plc_thread is not None and plc_thread.is_alive() and not stop_event.is_set()
 
 
-def start_monitoring(server):
-    """Call this from your Flask route to start monitoring. Returns the thread object."""
-    global plc_thread
-    stop_event.clear()
-    plc_thread = threading.Thread(target=trigger_connect, args=(server,), daemon=True)
-    plc_thread.start()
-    return plc_thread
+def start_monitoring(server, node=None):
+    """Returns (success, message). Fails fast when the PLC is off."""
+    global plc_thread, stop_event
+
+    with start_lock:
+        if is_running():
+            return True, "PLC is already connected"
+
+        node = (node or "").strip()
+        dfInfo = dfPlcdb = None
+
+        try:
+            # Only touch the database first if we need the saved IP
+            if not node:
+                dfInfo, dfPlcdb = load_plc_tables()
+                node = str(dfInfo.loc[0, "Info"]).strip()
+            ip, _, _ = parse_node(server, node)
+        except ValueError as e:
+            return False, str(e)
+        except Exception as e:
+            logging.exception("Could not read PLC configuration")
+            return False, f"Could not read PLC configuration: {e}"
+
+        # Fast network check BEFORE any slow work
+        if not is_plc_reachable(ip, server, timeout=1.0):
+            logging.warning(f"PLC {ip} not reachable")
+            return False, MSG_NOT_READY
+
+        try:
+            if dfPlcdb is None:
+                dfInfo, dfPlcdb = load_plc_tables()
+            plc = _open_plc(server, node, dfPlcdb)
+        except Exception as e:
+            logging.exception("PLC connect failed")
+            return False, f"{MSG_NOT_READY} ({e})"
+
+        df_split(dfPlcdb)
+        stop_event = threading.Event()         
+        plc_thread = threading.Thread(
+            target=monitor_loop,
+            args=(plc, dfPlcdb, server, stop_event),
+            daemon=True)
+        plc_thread.start()
+        logging.info("PLC Connected Successfully")
+        return True, "PLC Connected Successfully"
 
 
 def stop_monitoring():
-    """Call this from your Flask route to stop monitoring."""
-    stop_event.set()
+    stop_event.set()      
 
 
-# === Monitoring loop (runs inside a background thread) ===
-def monitor_loop(plc, dfPlcdb, server):
+def monitor_loop(plc, dfPlcdb, server, stop):
+    failures = 0
     try:
-        while not stop_event.is_set():
+        while not stop.is_set():
+            ok = False
             try:
-                monitor_triggers(plc, dfPlcdb, server)
-            except Exception as e:
-                logging.exception(f"Error during monitor_triggers cycle: {e}")
+                ok = monitor_triggers(plc, dfPlcdb, server)
+            except Exception:
+                logging.exception("Error during monitor_triggers cycle")
 
-            # Sleeps up to 5sec, but wakes immediately if stop_event is set
-            stop_event.wait(timeout=1)
+            failures = 0 if ok else failures + 1
+            if failures >= MAX_FAILED_CYCLES:
+                logging.error("PLC connection lost - stopping monitor")
+                set_latest_data({"msg": "PLC connection lost"})
+                stop.set()
+                break
+
+            stop.wait(timeout=1)
     finally:
-        if plc:
-         plc.disconnect()
-        logging.info("PLC Disconnected Successfully")
+        try:
+            plc.disconnect()
+        except Exception:
+            pass
+        logging.info("PLC Disconnected")
 
-
-def trigger_connect(server):
-    # FIX: this function used to open a postgres() connection set here
-    # and hang onto it for the rest of the function (and effectively for
-    # the entire monitoring session, since monitor_loop below blocks for
-    # as long as monitoring runs). engineConRead/engineConWrite/conn/
-    # cursorRead/cursorWrite are only actually needed for the two reads
-    # right below - close them immediately after, inside try/finally, so
-    # a restart of monitoring (stop_monitoring -> start_monitoring) can't
-    # accumulate leaked connections session after session.
-    cursorRead = cursorWrite = engineConRead = engineConWriten = conn = None
+ 
+def _auto_connect():
     try:
-        cursorRead, cursorWrite, engineConRead, engineConWriten, conn = postgres.postgres()
-        dfInfo = pd.read_sql_query('SELECT * FROM "Info_db";', engineConRead)
-        dfPlcdb = pd.read_sql_query('SELECT * FROM "Data";', engineConRead)
-    finally:
-        postgres.close_postgres(cursorRead, cursorWrite, engineConRead, engineConWriten, conn)
-
-    try:
-        node = dfInfo.loc[0, "Info"]
-        df_split(dfPlcdb)
-
-        # SNAP7
-        if server == 1:
-            plcIP, rack, slot = node.split(',')
-            plc = snap7_plc.snap7Connect(plcIP, int(rack), int(slot))
-            status = plc.get_cpu_state()
-            
-            print(status)
-            value = snap7_plc.lifeCounter(plc, dfPlcdb)
-            if not value:
-                try:
-                    plc.disconnect()
-                except:
-                    pass
-
-                return {
-                    "success": False,
-                    "message": "PLC is unreachable."
-    }
-
-            if status != "S7CpuStatusRun":
-                print("0")
-            if status == "S7CpuStatusRun":
-                print("TRUE")
-
-            logging.info("PLC Connected")
-            message = f"Waiting - {datetime.now()} - for Trigger"
-            logging.info(message)
-            logging.info("Monitoring Triggers...")
-
-            # One warm-up cycle before entering the main loop
-            monitor_triggers(plc, dfPlcdb, server)
-            
-
-            if not value:
-                return "PLC Lifecounter Failed"
-
-        # PYLOGIX
-        elif server == 2:
-            plc = pylogix.connectABPLC(node)
-            result = plc.GetPLCTime()
-            value = pylogix.lifeCounter(plc, dfPlcdb)
-            print(value)
-
-            if result.Status != "Success":
-                return f"PLC Connection Failed : {result.Status}"
-            if not value:
-                return "PLC Lifecounter Failed"
-        else:
-            return "Invalid Driver"
-
-        logging.info("PLC Connected Successfully")
-
-        # Blocks this thread for the lifetime of the monitoring session
-        monitor_loop(plc, dfPlcdb, server)
-        return "PLC Monitoring Stopped"
+        node = get_saved_node()
+        ok, msg = start_monitoring(guess_driver(node), node)
+        logging.info(f"Auto-connect: {ok} - {msg}")
+    except Exception:
+        logging.exception("Auto-connect failed")
+ 
+ 
+def start_auto_connect():
+    """Try once at app start. Stays Disconnected quietly if the PLC is off."""
+    threading.Thread(target=_auto_connect, daemon=True).start()
 
 
-
-    except Exception as e:
-        logging.exception("Error in trigger_connect")
-        set_latest_data({"msg": f"PLC not connected : {e}"})
-        return f"Error: {e}"
-
-
+# === Trigger handling ===
 def monitor_triggers(plc, dfPlcdb, server):
     current_date = datetime.now()
+    Trigger_active_tags, df_trigger = [], pd.DataFrame()
     try:
         if not plc:
             return False
@@ -231,16 +259,14 @@ def monitor_triggers(plc, dfPlcdb, server):
 
         elif server == 1:  # Siemens S7
             Trigger_active_tags, df_trigger = snap7_plc.monitor_trigger_s7(plc, dfPlcdb)
-            print("Woring on looping")
-            print(Trigger_active_tags, df_trigger)
-
             value = snap7_plc.lifeCounter(plc, dfPlcdb)
             if not value:
                 logging.error(f"PLC disconnected during monitoring : {current_date}")
                 return False
+        else:
+            return False
 
         if Trigger_active_tags:
-           
             logging.info(f"Info - {current_date} - Trigger activated")
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
@@ -249,10 +275,7 @@ def monitor_triggers(plc, dfPlcdb, server):
                 with data_lock:
                     df_trigger_tag = trigger_dataframes.get(trigger_tag)
 
-                print(df_trigger_tag)
-
                 if df_trigger_tag is not None and not df_trigger_tag.empty:
-                    
 
                     run_logging(plc, df_trigger_tag, server)
 
@@ -272,18 +295,17 @@ def monitor_triggers(plc, dfPlcdb, server):
                             )
 
                     except Exception as e:
-                        print(f"Reset Error {trigger_tag}: {e}")
+                        logging.error(f"Reset Error {trigger_tag}: {e}")
 
                 else:
-                    print(f"Trigger DataFrame not found: {trigger_tag}")
+                    logging.warning(f"Trigger DataFrame not found: {trigger_tag}")
 
             logging.info(f"Trigger - {current_date} - Reset")
             logging.info(f"Waiting - {timestamp} - for Trigger")
 
-            return True
+        return True   # healthy cycle (trigger or not)
 
     except Exception as e:
-        print(f"Error - {current_date} - {e}")
         logging.exception(f"Error in monitor_triggers: {e}")
         return False
 
@@ -293,23 +315,19 @@ def run_logging(plc, dfPlcdb, server):
     with db_write_lock:
         cursorRead = cursorWrite = engineConRead = engineConWrite = conn = None
         try:
-          
-            
+
             dfPlcdb = dfPlcdb.reset_index(drop=True)
 
             # ---------------- Postgres / DB Setup ----------------
             cursorRead, cursorWrite, engineConRead, engineConWrite, conn = postgres.postgres()
 
             dfInfo = pd.read_sql_query('SELECT * FROM "Info_db";', engineConRead)
-            print(dfInfo)
 
             cursorWrite.execute('SELECT COALESCE(MAX("BatchNo"), 0) FROM plc_data')
             max_batch = cursorWrite.fetchone()[0] or 0
             new_batch_no = max_batch + 1
-            
 
             # ---------------- Daily Batch Logic ----------------
-            
             try:
                 last_date = str(dfInfo.loc[7, "Info"])
                 daily_batch_no = int(dfInfo.loc[8, "Info"])
@@ -325,7 +343,6 @@ def run_logging(plc, dfPlcdb, server):
                 daily_batch_no = 1
                 last_date = current_date
 
-           
             cursorWrite.execute(
                 'UPDATE "Info_db" SET "Info" = %s WHERE "Particulars" = %s',
                 (daily_batch_no, "Batch_no")
@@ -354,7 +371,6 @@ def run_logging(plc, dfPlcdb, server):
             elif server == 1:  # Siemens Snap7
                 dfPlcdb = snap7_plc.read_bulk_plc_data(plc, dfPlcdb)
                 dfPlcdb["Timestamp"] = timestamp
-                
 
             else:
                 raise ValueError(f"Invalid Driver Selected: {server}")
@@ -374,18 +390,14 @@ def run_logging(plc, dfPlcdb, server):
                 dfPlcdb = dfPlcdb[~dfPlcdb['Category'].isin(category_value)]
 
             dfPlcdb = postgres.calculate_silo_diff(dfPlcdb)
-            print(dfPlcdb)
-            
-            
-            
+
             # ---------------- Insert PLC Data ----------------
             values = [
                 (row['Timestamp'], row['Name'], row['data_type'], row['Value'], row['Category'],
                  row['BatchNo'], row['DailyBatchNo'])
                 for _, row in dfPlcdb.iterrows()
             ]
-      
-           
+
             cursorWrite.executemany(
                 '''
                 INSERT INTO "plc_data"
@@ -397,14 +409,10 @@ def run_logging(plc, dfPlcdb, server):
 
             conn.commit()
 
-             #  call summary batch
+            # call summary batch
             calculate_batch_summary(dfPlcdb)
-        
-            
-            
-            # ---------------- Additional Processing ----------------
 
-            # Convert numeric values to numeric dtype
+            # ---------------- Additional Processing ----------------
             numeric_types = ["REAL", "INT", "DINT", "WORD", "DWORD", "LREAL", "UINT", "UDINT"]
 
             mask = dfPlcdb["data_type"].str.upper().isin(numeric_types)

@@ -80,8 +80,6 @@
                     </select>
                 </div>
 
-                
-
                 <div class="form-row">
                     <label>Station IP Address</label>
                     <input
@@ -89,28 +87,23 @@
                         id="stationIpInput"
                         placeholder="Enter IP Address">
                 </div>
-                
-               
 
                 <div class="connection-status">
                     <span id="statusDot" class="status-dot" style="display:none;"></span>
                     <span id="statusText"></span>
                 </div>
 
-                
-                           
-
                 <div class="card-actions">
-                    <button id="connectBtn" 
+                    <button id="connectBtn"
                     class="set-button">
                          Connect
                     </button>
 
-                    <button id="disconnectBtn"class="secondary-btn">
+                    <button id="disconnectBtn" class="secondary-btn">
                         Disconnect
                     </button>
 
-                    <button id="saveBtn"style="margin-left: 550px;" class="set-button"> 
+                    <button id="saveBtn" style="margin-left: 550px;" class="set-button">
                         Save
                     </button>
                 </div>
@@ -191,21 +184,18 @@
 
             <label style="margin-bottom: 12px;"><strong>Custom Date Range Backup</strong></label>
 
-
             <div class="input-group">
-            <span style="padding:10px 5px;">From:</span>    
-                <input 
-                    
+            <span style="padding:10px 5px;">From:</span>
+                <input
                     type="date"
                     id="customFromDate">
-                      
+
                 <span style="padding:10px 5px;">To:</span>
 
                 <input
                     type="date"
                     id="customToDate">
 
-                    
                 <button
                     id="createCustomBackupBtn"
                     class="set-button">
@@ -339,7 +329,7 @@ document.getElementById("setEmailIDBtn")?.addEventListener("click", async () => 
     }
 
     // Email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;   //hari@gmail.com & john123@yahoo.in
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     if (!emailRegex.test(email)) {
         alert("Please enter a valid Email ID");
@@ -371,7 +361,7 @@ document.getElementById("setEmailIDBtn")?.addEventListener("click", async () => 
 
     }
 
-});   
+});
 
 // REPORT NAME + LOGO UPLOAD SCRIPT
 
@@ -505,7 +495,6 @@ document.getElementById("configFileInput")?.addEventListener("change", async fun
 
 });
 
-
 </script>
 
 <!-- ===================================== -->
@@ -513,13 +502,6 @@ document.getElementById("configFileInput")?.addEventListener("change", async fun
 <!-- ===================================== -->
 
 <script>
-driverSelect?.addEventListener("change", () => {
-    fetch("/api/settings/set_driver", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ driver: driverSelect.value })
-    });
-});
 
 // Download Recipe
 
@@ -535,17 +517,13 @@ document.getElementById("uploadRecipeBtn")?.addEventListener("click", () => {
 
 document.getElementById("recipeFileInput")?.addEventListener("change", async function () {
 
-
-
     const file = this.files[0];
 
     if (!file) return;
 
-
     const formData = new FormData();
 
     formData.append("file", file);
-
 
     try {
 
@@ -599,142 +577,108 @@ document.getElementById("createCustomBackupBtn")?.addEventListener("click", () =
     window.location.href = `/api/backup/custom${query ? "?" + query : ""}`;
 });
 
-
 </script>
 
 <!-- ======================================== -->
 <!--  Connect & Disconnect of PLC   -->
 <!-- ======================================== -->
 <script>
+const driverEl = document.getElementById("driverSelect");
+const ipEl     = document.getElementById("stationIpInput");
 
-// ========================================
-// Update PLC Status UI
-// ========================================
+function updatePlaceholder() {
+    if (!driverEl || !ipEl) return;
+    ipEl.placeholder = driverEl.value === "1"
+        ? "e.g. 192.168.0.1,0,1  (ip,rack,slot)"
+        : "e.g. 192.168.0.1";
+}
+
 function updateStatus(isConnected) {
-
     const dot = document.getElementById("statusDot");
     const text = document.getElementById("statusText");
-
+    if (!dot || !text) return;
     dot.style.display = "inline-block";
+    dot.className = "status-dot " + (isConnected ? "connected" : "disconnected");
+    text.textContent = isConnected ? "Connected" : "Disconnected";
+}
 
-    if (isConnected) {
-        dot.className = "status-dot connected";
-        text.textContent = "Connected";
-    } else {
-        dot.className = "status-dot disconnected";
-        text.textContent = "Disconnected";
+async function refreshStatus() {
+    try {
+        const r = await fetch("/plc_status");
+        const d = await r.json();
+        updateStatus(d.status === "connected");
+    } catch {
+        updateStatus(false);
     }
 }
 
-
-// ========================================
-// Get PLC status automatically when page loads
-// ========================================
-window.addEventListener("load", async function () {
-
+// Load saved IP/driver, show live status, keep it fresh
+window.addEventListener("load", async () => {
+    if (!driverEl) return;
     try {
-
-        const response = await fetch("/plc_status");
-        const data = await response.json();
-
-        console.log("PLC Status:", data);
-
-        updateStatus(data.status === "connected");
-
-    } catch (error) {
-
-        console.error("PLC Status Error:", error);
-        updateStatus(false);
-
-    }
-
+        const r = await fetch("/api/settings/get_plc_config");
+        const cfg = await r.json();
+        driverEl.value = String(cfg.driver);
+        ipEl.value = cfg.station_ip || "";
+    } catch (e) { console.error(e); }
+    updatePlaceholder();
+    refreshStatus();
+    setInterval(refreshStatus, 5000);   // catches auto-connect and dropped link
 });
 
-
-// ========================================
-// Connect PLC
-// ========================================
-document.getElementById("connectBtn")?.addEventListener("click", async () => {
-
-    try {
-
-        const driver = driverSelect.value;
-
-        const response = await fetch("/start_plc", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ driver })
-        });
-
-        const data = await response.json();
-
-        alert(data.message || "PLC Connected Successfully");
-
-        updateStatus(true);
-
-    } catch (error) {
-
-        console.error("Connect Error:", error);
-        alert("PLC Connection Failed");
-
-    }
-
-});
-
-
-// ========================================
-// Disconnect PLC
-// ========================================
-document.getElementById("disconnectBtn")?.addEventListener("click", async () => {
-
-    try {
-
-        const response = await fetch("/stop_plc", {
-            method: "POST"
-        });
-
-        const data = await response.json();
-
-        alert(data.message || "PLC Disconnected Successfully");
-
-        updateStatus(false);
-
-    } catch (error) {
-
-        console.error("Disconnect Error:", error);
-        alert("PLC Disconnection Failed");
-
-    }
-
-});
-
-document.addEventListener("DOMContentLoaded", function () {
-    document.querySelectorAll('.db-storage-fill').forEach(el => {
-        const percent = el.dataset.percent || 0;
-        el.style.width = percent + '%';
+driverEl?.addEventListener("change", () => {
+    updatePlaceholder();
+    fetch("/api/settings/set_driver", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ driver: driverEl.value })
     });
 });
 
-//save PLC
-// document.getElementById("saveBtn")?.addEventListener("click", async () => {
+// ---- Connect ----
+document.getElementById("connectBtn")?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = "Connecting...";
+    try {
+        const r = await fetch("/start_plc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ driver: driverEl.value, station_ip: ipEl.value.trim() })
+        });
+        const d = await r.json();
+        alert(d.message);
+        updateStatus(d.success);
+    } catch (e) {
+        console.error(e);
+        alert("Server error - could not reach the application");
+        updateStatus(false);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
+    }
+});
 
-//     try {
-//         const response = await fetch("/save_plc", {
-//             method: "POST"
-//         });
-
-//         const data = await response.json();
-
-//         alert(data.message || "PLC saved Successfully");
-//     } catch (error) {
-//         console.error(error);
-//         alert("PLC not saved  ");
-//     }
-// });
-
-
+// ---- Disconnect ----
+document.getElementById("disconnectBtn")?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = "Disconnecting...";
+    try {
+        const r = await fetch("/stop_plc", { method: "POST" });
+        const d = await r.json();
+        alert(d.message);          // "PLC is not connected" when nothing is connected
+        updateStatus(false);
+    } catch (e) {
+        console.error(e);
+        alert("Server error - could not reach the application");
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
+    }
+});
 </script>
 
 <!-- ===================================== -->
