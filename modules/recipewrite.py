@@ -3,6 +3,19 @@ from sqlalchemy import text
 from config import sqliteCon
 from plc_connection import snap7_plc,pylogix
 import logging
+
+
+def _plc_node(dfInfo):
+    """PLC address from Info_db by key; falls back to row 0 for older databases."""
+    match = dfInfo.loc[dfInfo["Particulars"] == "Plc_IP", "Info"]
+    return str(match.iloc[0] if not match.empty else dfInfo.loc[0, "Info"]).strip()
+
+
+def _failed_tags(df, ok_value):
+    """Names of the tags whose write Status is not ok_value."""
+    return df.loc[df["Status"] != ok_value, "Name"].tolist()
+
+
 def writePlcRecipe(mixerno, recipe_name, selected_module):
     try:
 
@@ -81,8 +94,8 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # explicit ORDER BY. Worth switching to
             # WHERE "Particulars" = '<key>' once you can confirm the key
             # name used for this row.
-            node = dfInfo.loc[0, "Info"]
-            plcIP, rack, slot = node.split(',')
+            node = _plc_node(dfInfo)
+            plcIP, rack, slot = [p.strip() for p in node.split(',')]
             plc = snap7_plc.snap7Connect(plcIP,int(rack),int(slot))
             if plc is None:
                 return {"success": False,"message": f"Unable to connect PLC ({plcIP})."}
@@ -131,12 +144,26 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # Trigger Download Bit
             # ---------------------------------------------------------
             
+            failed = _failed_tags(dfRecipeTags, True) + _failed_tags(dfHeader, True)
+            if failed:
+                try:
+                    plc.disconnect()
+                except:
+                    pass
+                msg = f"Recipe NOT downloaded - PLC write failed for: {failed}"
+                logging.error(msg)
+                return {"success": False,"message": msg}
+
             response = snap7_plc.set_tag_snap7(plc,int(tagWriteDwn["db_number"]),int(float(tagWriteDwn["start_offset"])),0 if pd.isna(tagWriteDwn["bit_offset"])else int(float(tagWriteDwn["bit_offset"])))
            
             try:
                 plc.disconnect()
             except:
                 pass
+            if not response:
+                msg = "Recipe values written but the RecipeDownloaded bit could not be set"
+                logging.error(msg)
+                return {"success": False,"message": msg}
             msg = "Recipes downloaded to PLC Successfully"
             logging.info(msg)
             return {"success": True,"message": msg}
@@ -156,8 +183,8 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # --------------------------------------------------
             # Get Ready and Download Trigger Tags
             # --------------------------------------------------
-            tagReadReady = dfHeader[dfHeader["SiloNo"] == "Read"]["Name"]
-            tagWriteDwn = dfHeader[dfHeader["SiloNo"] == "Write"]["Name"]
+            tagReadReady = dfHeader[dfHeader["SiloNo"] == "Read"]["Tag_name"]
+            tagWriteDwn = dfHeader[dfHeader["SiloNo"] == "Write"]["Tag_name"]
             dfHeader = dfHeader[~dfHeader["SiloNo"].isin(["Read", "Write"])].reset_index(drop=True)
             if tagReadReady.empty:
                 return {"success": False,"message": "Ready tag not configured."}
@@ -192,12 +219,8 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             dfRecipeTags[["SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed"]] = (dfRecipeTags[["SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed"]].fillna(0))
             # Create Value Column
             dfRecipeTags["Value"] = (dfRecipeTags.apply(lambda row: row[row["Name"]],axis=1))
-            # Keep Required Columns
-            # NOTE (pre-existing, not a DB-conversion issue): "Name" is
-            # listed twice here. Left as-is since the intended third
-            # column isn't clear from context — worth checking whether
-            # this should be a different column (e.g. a tag identifier).
-            dfRecipeTags = dfRecipeTags[["SiloNo", "Name", "Name", "Value"]]
+            # Keep Required Columns (Tag_name is the PLC address written to)
+            dfRecipeTags = dfRecipeTags[["SiloNo", "Name", "Tag_name", "Value"]]
             print("Final Recipe Tags")
             print(dfRecipeTags)
             # --------------------------------------------------
@@ -217,7 +240,7 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # Same positional-row caveat noted in the selected_module == 1
             # branch above (row 0 of "Info_db" isn't guaranteed under
             # Postgres without an explicit ORDER BY).
-            plcIP = dfInfo.loc[0, "Info"]
+            plcIP = _plc_node(dfInfo)
             print("PLC IP :", plcIP)
             plc = pylogix.connectABPLC(plcIP)
             if plc is None:
@@ -239,23 +262,37 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
             # Write Recipe Tags
             # --------------------------------------------------
             print("Writing Recipe Tags...")
-            dfRecipeTags["Status"] = (dfRecipeTags.apply(lambda row: pylogix.writeinAb(plc,row["Name"],row["Value"]),axis=1))
+            dfRecipeTags["Status"] = (dfRecipeTags.apply(lambda row: pylogix.writeinAb(plc,row["Tag_name"],row["Value"]),axis=1))
             print(dfRecipeTags)
             # --------------------------------------------------
             # Write Header Tags
             # --------------------------------------------------
             print("Writing Header Tags...")
-            dfHeader["Status"] = (dfHeader.apply(lambda row: pylogix.writeinAb(plc,row["Name"],row["Value"]),axis=1))
+            dfHeader["Status"] = (dfHeader.apply(lambda row: pylogix.writeinAb(plc,row["Tag_name"],row["Value"]),axis=1))
             print(dfHeader)
             # --------------------------------------------------
             # Trigger Download Bit
             # --------------------------------------------------
+            failed = _failed_tags(dfRecipeTags, "Success") + _failed_tags(dfHeader, "Success")
+            if failed:
+                try:
+                    plc.Close()
+                except:
+                    pass
+                msg = f"Recipe NOT downloaded - PLC write failed for: {failed}"
+                logging.error(msg)
+                return {"success": False,"message": msg}
+
             response = pylogix.set_tag_ab(plc,tagWriteDwn)
             print("Download Trigger Response:",response)
             try:
                 plc.Close()
             except:
                 pass
+            if not response:
+                msg = "Recipe values written but the RecipeDownloaded tag could not be set"
+                logging.error(msg)
+                return {"success": False,"message": msg}
             msg = "Recipes downloaded to PLC Successfully"
             logging.info(msg)
             return {"success": True,"message": msg}

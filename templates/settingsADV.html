@@ -593,20 +593,21 @@ function updatePlaceholder() {
         : "e.g. 192.168.0.1";
 }
 
-function updateStatus(isConnected) {
+function updateStatus(isConnected, reconnecting = false) {
     const dot = document.getElementById("statusDot");
     const text = document.getElementById("statusText");
     if (!dot || !text) return;
     dot.style.display = "inline-block";
     dot.className = "status-dot " + (isConnected ? "connected" : "disconnected");
-    text.textContent = isConnected ? "Connected" : "Disconnected";
+    text.textContent = isConnected ? "Connected"
+                     : reconnecting ? "Reconnecting…" : "Disconnected";
 }
 
 async function refreshStatus() {
     try {
         const r = await fetch("/plc_status");
         const d = await r.json();
-        updateStatus(d.status === "connected");
+        updateStatus(d.status === "connected", d.status === "reconnecting");
     } catch {
         updateStatus(false);
     }

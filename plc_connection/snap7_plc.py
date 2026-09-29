@@ -1,5 +1,6 @@
 import snap7
 import struct
+import logging
 import pandas as pd
 from sqlalchemy import create_engine, text
 import datetime
@@ -11,143 +12,108 @@ from datetime import datetime
 
 
 def snap7Connect(plcIP, rack, slot):
+    """Returns a connected client, or None if the PLC could not be reached."""
+    plc = snap7.client.Client()
     try:
-        print(plcIP, rack, slot)
-        plc = snap7.client.Client()
         plc.connect(plcIP, rack, slot)
         return plc
     except Exception as e:
-        print(f"Error updating license: {e}")      
+        logging.error(f"Snap7 connect to {plcIP} (rack {rack}, slot {slot}) failed: {e}")
+        try:
+            plc.destroy()
+        except Exception:
+            pass
+        return None
+
+
+# ---------------------------------------------------------------
+# Tag decoding shared by every read path.
+# ---------------------------------------------------------------
+def _decode_value(raw, offset, data_type, bit_offset=0):
+    dt = str(data_type).upper()
+
+    if dt == "BOOL":
+        return (raw[offset] >> int(bit_offset)) & 1
+    if dt in ("REAL", "FLOAT"):
+        return round(struct.unpack_from(">f", raw, offset)[0], 2)
+    if dt == "INT":
+        return struct.unpack_from(">h", raw, offset)[0]
+    if dt == "WORD":
+        return struct.unpack_from(">H", raw, offset)[0]
+    if dt == "DINT":
+        return struct.unpack_from(">i", raw, offset)[0]
+    if dt == "DWORD":
+        return struct.unpack_from(">I", raw, offset)[0]
+    if dt == "STRING":
+        max_len = raw[offset]
+        str_len = raw[offset + 1]
+        # str_len > max_len is corrupt/misaligned data (bad offset, wrong DB)
+        if str_len > max_len:
+            return None
+        return raw[offset + 2: offset + 2 + str_len].decode("utf-8", errors="ignore").strip()
+    return None
+
+
+def _read_single_tag(plc, db_number, start_offset, data_type, bit_offset=0):
+    """One tag, reading only the bytes it occupies (STRING: header first, then its text)."""
+    db_number, start_offset = int(db_number), int(start_offset)
+    dt = str(data_type).upper()
+
+    if dt == "STRING":
+        head = plc.db_read(db_number, start_offset, 2)
+        raw = bytearray(head)
+        if 0 < head[1] <= head[0]:
+            raw += plc.db_read(db_number, start_offset + 2, head[1])
+        return _decode_value(raw, 0, dt)
+
+    raw = plc.db_read(db_number, start_offset, _tag_byte_size(dt))
+    return _decode_value(raw, 0, dt, bit_offset)
+
 
 def lifeCounter(plc, df):
+    """Heartbeat: copy the value of row 0 (read tag) into row 1 (write tag)."""
     try:
-        # --- Read source ---
-        db_number_r = int(df.loc[0, 'db_number'])
-        data_type_r = df.loc[0, 'data_type'].upper()
-        start_offset_r = int(df.loc[0, 'start_offset'])
-        bit_offset_r = int(df.loc[0].get('bit_offset', 0))
+        read_row, write_row = df.iloc[0], df.iloc[1]
 
-        if data_type_r == 'BOOL':
-            raw = plc.db_read(db_number_r, start_offset_r, 1)
-            value = (raw[0] >> bit_offset_r) & 1
+        value = _read_single_tag(
+            plc, read_row['db_number'], read_row['start_offset'],
+            read_row['data_type'], read_row.get('bit_offset', 0))
+        if value is None:
+            raise ValueError(f"Unsupported read type: {read_row['data_type']}")
 
-        elif data_type_r == 'REAL':
-            raw = plc.db_read(db_number_r, start_offset_r, 4)
-            value = round(struct.unpack('>f', raw)[0], 2)  # ✅ Big-endian
-
-        elif data_type_r == 'INT':
-            raw = plc.db_read(db_number_r, start_offset_r, 2)
-            value = struct.unpack('>h', raw)[0]  # ✅ Big-endian
-
-        elif data_type_r == 'DINT':
-            raw = plc.db_read(db_number_r, start_offset_r, 4)
-            value = struct.unpack('>i', raw)[0]  # ✅ Big-endian
-
-        else:
-            raise ValueError(f"Unsupported read type: {data_type_r}")
-
-        print("Life Counter (read):", value)
-
-        # --- Write target ---
-        db_number_w = int(df.loc[1, 'db_number'])
-        data_type_w = df.loc[1, 'data_type'].upper()
-        start_offset_w = int(df.loc[1, 'start_offset'])
-        bit_offset_w = int(df.loc[1].get('bit_offset', 0))
-
-        if data_type_w == 'BOOL':
-            data = plc.db_read(db_number_w, start_offset_w, 1)
-            set_bool(data, 0, bit_offset_w, value)
-            plc.db_write(db_number_w, start_offset_w, data)
-
-        elif data_type_w == 'REAL':
-            data = struct.pack('>f', float(value))
-            plc.db_write(db_number_w, start_offset_w, data)
-
-        elif data_type_w == 'INT':
-            data = struct.pack('>h', int(value))
-            plc.db_write(db_number_w, start_offset_w, data)
-
-        elif data_type_w == 'DINT':
-            data = struct.pack('>i', int(value))
-            plc.db_write(db_number_w, start_offset_w, data)
-
-        else:
-            raise ValueError(f"Unsupported write type: {data_type_w}")
-
+        if not writeinSnap7(plc, int(write_row['db_number']), int(write_row['start_offset']),
+                            int(write_row.get('bit_offset', 0)), write_row['data_type'], value):
+            raise ValueError("life counter write failed")
         return True
 
     except Exception as e:
-        print(f"❌ Error in lifeCounter: {e}")
+        logging.error(f"Error in lifeCounter: {e}")
         return False
     
 
 def monitor_trigger_s7(plc, df):
-
+    """Reads only the given trigger rows. Value is None where a read failed."""
+    df = df.copy()
     values = []
-    timestamps = []
 
     for _, row in df.iterrows():
-
         try:
-            db = int(row['db_number'])
-            dt = str(row['data_type']).upper()
-            start = int(row['start_offset'])
-            bit = int(row.get('bit_offset', 0))
-
-            # Read 4 bytes from PLC
-            raw = plc.db_read(db, start, 4)
-
-            if dt == "BOOL":
-                val = get_bool(raw, 0, bit)
-
-            elif dt in ["INT", "WORD"]:
-                val = get_int(raw, 0)
-
-            elif dt in ["REAL", "FLOAT"]:
-                val = get_real(raw, 0)
-
-            else:
-                val = None
-
+            values.append(_read_single_tag(
+                plc, row['db_number'], row['start_offset'],
+                row['data_type'], row.get('bit_offset', 0)))
         except Exception as e:
-            print(f"Read Error for {row['Name']} : {e}")
-            val = None
-
-        values.append(val)
-
-        timestamps.append(
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        )
-
-    # Add values to dataframe
-    df = df.copy()
+            logging.error(f"Trigger read error for {row['Name']}: {e}")
+            values.append(None)
 
     df["Value"] = values
-    df["Timestamp"] = timestamps
+    df["Timestamp"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-    # Filter only Trigger category
-    df_trigger = df[
-        df["Category"] == "Trigger"
-    ].copy()
+    active = [
+        name for name, val in zip(df["Name"], df["Value"])
+        if val is not None and bool(val)
+    ]
+    return active, df
 
-
-    # Convert values to numeric if possible
-    df_trigger["Value"] = pd.to_numeric(
-        df_trigger["Value"],
-        errors="coerce"
-    )
-
-    # Active trigger list
-    active = []
-
-    for _, row in df_trigger.iterrows(): 
-
-        # Trigger active if value is non-zero or True
-        if pd.notna(row["Value"]) and bool(row["Value"]):
-            active.append(row["Name"])
-
-    
-    return active, df_trigger
 
 def clean_plc_datetime(date_string):
     if pd.isna(date_string) or str(date_string).strip() == "":
@@ -181,94 +147,72 @@ def _tag_byte_size(data_type):
     }.get(dt, 256)  # STRING and anything unrecognized
 
 
+def _block_end(plc, db_number, db_rows):
+    """End offset of one block read covering db_rows. A STRING whose 256-byte
+    allowance would stick out past the other tags gets its real size from its
+    header byte (declared max length), so the read never runs past the DB end."""
+    ends = []
+    for _, row in db_rows.iterrows():
+        if str(row["data_type"]).upper() != "STRING":
+            ends.append(int(row["start_offset"]) + _tag_byte_size(row["data_type"]))
+    fixed_end = max(ends, default=0)
+
+    for _, row in db_rows.iterrows():
+        if str(row["data_type"]).upper() == "STRING":
+            start = int(row["start_offset"])
+            size = 256
+            if start + size > fixed_end:
+                try:
+                    size = plc.db_read(db_number, start, 1)[0] + 2
+                except Exception:
+                    pass
+            ends.append(start + size)
+    return max(ends)
+
+
 def read_bulk_plc_data(plc, dfPlcdb):
+    """One db_read per DB. If that block read fails (e.g. a trailing STRING's
+    256-byte allowance runs past the end of the DB) the DB is read tag by tag
+    instead, so one oversized read never loses the whole batch."""
     dfPlcdb = dfPlcdb.copy()
     dfPlcdb["Value"] = None
 
     if not plc.get_connected():
-        print(" PLC not connected!")
+        logging.error("read_bulk_plc_data: PLC not connected")
         return dfPlcdb
 
     for db_number in dfPlcdb["db_number"].unique():
         db_rows = dfPlcdb[dfPlcdb["db_number"] == db_number]
 
         start_offset = int(db_rows["start_offset"].min())
-
-        # FIX: end_offset now accounts for each tag's real size
-        # (previously hardcoded "+6", which truncated STRING reads
-        # and could even under-read trailing REAL/DINT tags).
-        end_offset = max(
-            int(row["start_offset"]) + _tag_byte_size(row["data_type"])
-            for _, row in db_rows.iterrows()
-        )
+        end_offset = _block_end(plc, int(db_number), db_rows)
         size = end_offset - start_offset
 
         try:
             raw_data = plc.db_read(int(db_number), start_offset, size)
         except Exception as e:
-            print(f" Failed to read DB{db_number}: {e}")
-            continue
+            logging.warning(f"Block read DB{db_number} ({size} bytes) failed: {e} - reading tag by tag")
+            raw_data = None
 
-        # Decode each tag from the buffer
         for idx, row in db_rows.iterrows():
-            local_offset = int(row["start_offset"]) - start_offset
-
             try:
-                data_type = row["data_type"].upper()
-
-                if data_type == "BOOL":
-                    dfPlcdb.at[idx, "Value"] = (
-                        raw_data[local_offset] >> int(row.get("bit_offset", 0))
-                    ) & 1
-
-                elif data_type == "REAL":
-                    dfPlcdb.at[idx, "Value"] = round(
-                        struct.unpack_from(">f", raw_data, local_offset)[0], 2
-                    )
-
-                elif data_type == "INT":
-                    dfPlcdb.at[idx, "Value"] = struct.unpack_from(">h", raw_data, local_offset)[0]
-
-                elif data_type == "DINT":
-                    dfPlcdb.at[idx, "Value"] = struct.unpack_from(">i", raw_data, local_offset)[0]
-
-                elif data_type == "STRING":
-                    max_len = raw_data[local_offset]
-                    str_len = raw_data[local_offset + 1]
-
-                    # FIX: a str_len of 0 is a legitimate, valid empty
-                    # PLC string (e.g. an unused Silo's MaterialName)
-                    # and must NOT be treated as a null/failed read.
-                    if str_len == 0:
-                        value = ""
-
-                        if row["Name"] in ["Start Date Time", "End Date Time"]:
-                            value = clean_plc_datetime(value)
-
-                        dfPlcdb.at[idx, "Value"] = value
-
-                    elif 0 < str_len <= max_len:
-                        value = raw_data[
-                            local_offset + 2 : local_offset + 2 + str_len
-                        ].decode("utf-8", errors="ignore").strip()
-
-                        # Format PLC Date/Time
-                        if row["Name"] in ["Start Date Time", "End Date Time"]:
-                            value = clean_plc_datetime(value)
-
-                        dfPlcdb.at[idx, "Value"] = value
-
-                    else:
-                        # str_len > max_len is genuinely corrupt/misaligned
-                        # data (bad offset, wrong DB, etc.) - keep as None
-                        # so run_logging's validation still catches it.
-                        dfPlcdb.at[idx, "Value"] = None
-
+                if raw_data is not None:
+                    value = _decode_value(
+                        raw_data, int(row["start_offset"]) - start_offset,
+                        row["data_type"], row.get("bit_offset", 0))
                 else:
-                    dfPlcdb.at[idx, "Value"] = None
+                    value = _read_single_tag(
+                        plc, db_number, row["start_offset"],
+                        row["data_type"], row.get("bit_offset", 0))
+
+                # Format PLC Date/Time (an empty/invalid date becomes None)
+                if row["Name"] in ["Start Date Time", "End Date Time"]:
+                    value = clean_plc_datetime(value)
+
+                dfPlcdb.at[idx, "Value"] = value
 
             except Exception as e:
-                print(f" Decode error DB{db_number} offset {row['start_offset']}: {e}")
+                logging.error(f"Read/decode error DB{db_number} offset {row['start_offset']}: {e}")
                 dfPlcdb.at[idx, "Value"] = None
 
     return dfPlcdb
@@ -492,12 +436,15 @@ def plcDataSnap7(plc, db_number, data_type, start_offset, bit_offset):
         print(f"Parameters - db_number: {db_number}, start_offset: {start_offset}, data_type: {data_type}, bit_offset: {bit_offset}")
 
 def reset_trigger_tag_s7(plc, db_number, start_offset, bit_offset=0):
+    """Clears the trigger bit. Returns True on success."""
     try:
-        data = plc.db_read(db_number, start_offset, 1)
-        set_bool(data, 0, bit_offset, False)
-        plc.db_write(db_number, start_offset, data)
+        data = plc.db_read(int(db_number), int(start_offset), 1)
+        set_bool(data, 0, int(bit_offset), False)
+        plc.db_write(int(db_number), int(start_offset), data)
+        return True
     except Exception as e:
-        print(f"❌ Error resetting trigger DB{db_number}, Offset {start_offset}.{bit_offset}: {e}")
+        logging.error(f"Error resetting trigger DB{db_number}, Offset {start_offset}.{bit_offset}: {e}")
+        return False
 
 
 #=========================
@@ -505,48 +452,24 @@ def reset_trigger_tag_s7(plc, db_number, start_offset, bit_offset=0):
 #=========================
 
 def set_tag_snap7(plc, db_number, start_offset, bit_offset):
+    """Sets a bit to True. Returns True on success."""
     try:
-        # Read the existing byte
-        data = plc.db_read(db_number, start_offset, 1)
-        # Set the required bit to True
-        set_bool(data, 0, bit_offset, True)
-        # Write back to PLC
-        plc.db_write(db_number, start_offset, data)
-        
+        data = plc.db_read(int(db_number), int(start_offset), 1)
+        set_bool(data, 0, int(bit_offset), True)
+        plc.db_write(int(db_number), int(start_offset), data)
+        return True
     except Exception as e:
-        print(f"Error in set_tag_snap7: {e}")
+        logging.error(f"Error in set_tag_snap7: {e}")
+        return False
 
 
 def readSnap7PLC(plc,db_number,start_offset,data_type='BOOL',bit_offset=0):
   
     try:
-        db_number = int(db_number)
-        start_offset = int(start_offset)
-        bit_offset = int(bit_offset)
-        data_type = str(data_type).upper()
-
-        if data_type == 'BOOL':
-            data = plc.db_read(db_number, start_offset, 1)
-            value = get_bool(data, 0, bit_offset)
-
-        elif data_type == 'REAL':
-            data = plc.db_read(db_number, start_offset, 4)
-            value = round(get_real(data, 0), 2)
-
-        elif data_type == 'INT':
-            data = plc.db_read(db_number, start_offset, 2)
-            value = get_int(data, 0)
-
-        elif data_type == 'DINT':
-            data = plc.db_read(db_number, start_offset, 4)
-            value = get_dint(data, 0)
-
-        elif data_type == 'STRING':
-            # Adjust length according to PLC declaration
-            data = plc.db_read(db_number, start_offset, 256)
-            value = get_string(data, 0)
-
-        else:
+        value = _read_single_tag(plc, db_number, start_offset, data_type, bit_offset)
+        if str(data_type).upper() == 'BOOL':
+            value = bool(value)
+        if value is None:
             print(f"Unsupported data type: {data_type}")
             return None, None
 
@@ -560,13 +483,14 @@ def readSnap7PLC(plc,db_number,start_offset,data_type='BOOL',bit_offset=0):
     
 def writeinSnap7(plc, db_number, start_offset, bit_offset, data_type, write_value):
     try:
+        data_type = str(data_type).upper()
 
         if data_type == 'BOOL':
             data = plc.db_read(db_number, start_offset, 1)
             set_bool(data, 0, bit_offset, bool(write_value))
             plc.db_write(db_number, start_offset, data)
 
-        elif data_type == 'REAL':
+        elif data_type in ('REAL', 'FLOAT'):
             data = bytearray(4)
             set_real(data, 0, float(write_value))
             plc.db_write(db_number, start_offset, data)
@@ -576,15 +500,24 @@ def writeinSnap7(plc, db_number, start_offset, bit_offset, data_type, write_valu
             set_int(data, 0, int(write_value))
             plc.db_write(db_number, start_offset, data)
 
+        elif data_type == 'WORD':
+            plc.db_write(db_number, start_offset, bytearray(struct.pack('>H', int(write_value))))
+
         elif data_type == 'DINT':
             data = bytearray(4)
             set_dint(data, 0, int(write_value))
             plc.db_write(db_number, start_offset, data)
 
+        elif data_type == 'DWORD':
+            plc.db_write(db_number, start_offset, bytearray(struct.pack('>I', int(write_value))))
+
         elif data_type == 'STRING':
-            max_length = 254
+            # Use the length declared in the PLC (first header byte) so a
+            # shorter String[n] never overwrites the tags that follow it.
+            max_length = plc.db_read(db_number, start_offset, 1)[0] or 254
+            text = str(write_value)[:max_length]
             data = bytearray(max_length + 2)
-            set_string(data, 0, str(write_value), max_length)
+            set_string(data, 0, text, max_length)
             plc.db_write(db_number, start_offset, data)
 
         else:

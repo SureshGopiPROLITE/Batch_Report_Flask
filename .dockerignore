@@ -1,4 +1,39 @@
-__pycache__/
-*.pyc
+# Keep the image small and free of site data / secrets
+.git
+.gitignore
+.gitattributes
+.vscode
+.idea
+**/__pycache__
+**/*.pyc
 .env
+.env.*
+!.env.example
 venv/
+.venv/
+
+# Runtime data - lives in volumes, never baked into the image
+Backups/
+logs/
+**/*.log
+backup_log.json
+*.dump
+*.tar
+
+# Dev leftovers (wkhtmltopdf alone is 87 MB; reports use WeasyPrint)
+data_files/wkhtmltopdf
+data_files/*.exe
+data_files/*.pdf
+data_files/*.html
+data_files/*.xlsx
+data_files/Report.png
+grouped_preview.xlsx
+
+# Deployment tooling (licence generator is vendor-only)
+tools/
+docker-compose*.yml
+DEPLOY.md
+deploy/
+
+# Built client packages
+release/

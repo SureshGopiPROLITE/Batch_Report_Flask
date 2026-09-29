@@ -27,24 +27,18 @@
                     </ul>
                     <h2>About App</h2>
                     <ul class="benefits">
-                        <li>⚡ <strong>Version:</strong></li>
-                        <li>⚡ <strong>License Information:</strong></li>
-                        <li>⚡ <strong>Expiration Date:</strong></li>
+                        <li>⚡ <strong>Version:</strong> {{ app_version }}</li>
+                        <li>⚡ <strong>License Information:</strong> {{ licence.type_name }}{% if licence.customer %} &ndash; {{ licence.customer }}{% endif %} (Machine ID {{ licence.machine_id }})</li>
+                        <li>⚡ <strong>Expiration Date:</strong> {{ licence.expires.strftime('%d-%m-%Y') if licence.expires else 'Never' }}{% if licence.days_left is not none %} ({{ licence.days_left }} days left){% endif %}</li>
                         <li>⚡ <strong>For further information or inquiries, please contact: <a href="https://www.proliteautomation.com/contact" style="text-decoration: none;">Prolite Automation</a></strong></li>
                     </ul>
                 </div>
             </div>
         </div>
+        {% if role in ['admin', 'superadmin'] %}
         <div class="key-space">
-            <form>
-                <label for="licensekey">
-                    License Key:
-                </label>
-                <input id="licensekey" type="text" placeholder="Enter License Key"/>
-                <button>
-                    Activate
-                </button>
-            </form>
+            <a href="{{ url_for('activation') }}" class="inv-button" style="display:inline-block;width:auto;padding:0 1rem;line-height:4vh;text-decoration:none;">Change licence key</a>
         </div>
+        {% endif %}
     </div>
 {% endblock %}

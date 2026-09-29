@@ -101,6 +101,13 @@
 
         <!-- Main Page Content -->
         <div class="main-content">
+            {% if licence and licence.valid and licence.days_left is not none %}
+            <div style="background:{{ '#fdecea' if licence.days_left <= 5 else '#fff4e0' }};color:{{ '#b42318' if licence.days_left <= 5 else '#8a5300' }};padding:6px 12px;border-radius:6px;margin:6px 0;font-size:.9rem;">
+                {{ licence.type_name }} licence &ndash; {{ licence.days_left }} day{{ '' if licence.days_left == 1 else 's' }} left
+                (expires {{ licence.expires.strftime('%d-%m-%Y') }}).
+                <a href="{{ url_for('activation') }}" style="color:inherit;font-weight:bold;">Enter purchased key</a>
+            </div>
+            {% endif %}
             {% block content %}{% endblock %}
         </div>
     </div>
@@ -269,5 +276,25 @@
 
     </script>
 
+    <script>
+        // Plant PCs stay on for weeks with the same page open: re-check the
+        // licence every 5 minutes so an expired demo leaves the page by itself.
+        setInterval(async () => {
+            try {
+                const r = await fetch('/api/licence');
+                if (!(await r.json()).valid) location.href = '/activation';
+            } catch (e) { /* server restarting - try again next time */ }
+        }, 5 * 60 * 1000);
+    </script>
+    <script>
+        // Plant PCs stay on for weeks with this page open: re-check the licence
+        // so an expired demo locks the screen without anyone reloading.
+        setInterval(async () => {
+            try {
+                const r = await fetch('/api/licence', { cache: 'no-store' });
+                if (r.ok && !(await r.json()).valid) location.href = '/activation';
+            } catch (e) { /* server restarting - try again next time */ }
+        }, 5 * 60 * 1000);
+    </script>
 </body>
 </html>

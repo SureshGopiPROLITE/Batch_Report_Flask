@@ -1,71 +1,79 @@
+# Batch Report - on-premises deployment
+#   First time (Windows): run deploy\install.ps1 - it creates .env and starts everything
+#   See DEPLOY.md for the full procedure.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"      # docker's own logs must not fill the disk
+    max-file: "5"
+
 services:
   web:
+    image: batch-report:${APP_VERSION:-latest}
     build:
       context: .
-      dockerfile: Dockerfile
-
-    container_name: skew_batch
-
-    ports:
-      - "5000:5000"
-      - "8050:8050"
-
+    container_name: batch_report_web
+    restart: unless-stopped
+    env_file: .env
     environment:
-      FLASK_ENV: production
-      PYTHONUNBUFFERED: "1"
-      TZ: Asia/Kolkata
-
-      # PostgreSQL connection
       DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: PLCDB2
-      DB_USER: postgres
-      DB_PASSWORD: 12345678
-
+      DB_PORT: "5432"
+      TZ: ${TZ:-Asia/Kolkata}
+      # Licence is bound to the HOST's MAC - the container cannot read it itself.
+      # deploy/install.ps1 writes it into .env.
+      HOST_MAC: ${HOST_MAC:?HOST_MAC missing in .env - run deploy/install.ps1}
+    ports:
+      - "${WEB_PORT:-5000}:5000"      # web UI
+      - "${DASH_PORT:-8050}:8050"     # analytics dashboard
+    volumes:
+      - app_logs:/app/logs
+      - app_backups:/app/Backups
+      - app_data_files:/app/data_files   # uploaded company logo
     depends_on:
       postgres:
         condition: service_healthy
-
-    restart: unless-stopped
-
-    networks:
-      - skew_network
+    logging: *default-logging
+    networks: [batch_net]
 
   postgres:
-    image: timescale/timescaledb:latest-pg18
-
-    container_name: skew_postgres
-
+    image: postgres:18-bookworm
+    container_name: batch_report_db
     restart: unless-stopped
-
     environment:
-      POSTGRES_DB: PLCDB2
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 12345678
-      TZ: Asia/Kolkata
-
-      # PostgreSQL 18 data directory
-      PGDATA: /var/lib/postgresql/18/docker
-
-    ports:
-      - "5434:5432"
-
+      POSTGRES_DB: ${DB_NAME:-PLCDB2}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      TZ: ${TZ:-Asia/Kolkata}
+      PGTZ: ${TZ:-Asia/Kolkata}
+    # Not published to the plant network. For support access from the host
+    # only, uncomment (binds to localhost, not to the LAN):
+    # ports:
+    #   - "127.0.0.1:5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql
-
+      - pg_data:/var/lib/postgresql              # PG 18 image layout
+      - ./deploy/db-init:/docker-entrypoint-initdb.d:ro   # runs on an EMPTY volume only
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d PLCDB2"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 30s
-
-    networks:
-      - skew_network
+    shm_size: 256mb
+    logging: *default-logging
+    networks: [batch_net]
 
 volumes:
-  postgres_data:
+  pg_data:
+  app_logs:
+  app_backups:
+  app_data_files:
 
 networks:
-  skew_network:
+  batch_net:
     driver: bridge
+    ipam:
+      config:
+        # Must NOT overlap the plant/PLC network, or the PLC becomes
+        # unreachable from the container. Change in .env if it clashes.
+        - subnet: ${DOCKER_SUBNET:-10.254.254.0/24}

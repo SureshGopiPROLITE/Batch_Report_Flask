@@ -1,49 +1,114 @@
-{% extends 'base.html' %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SKEW - Activate Licence</title>
+    <link rel="icon" type="image/x-icon" href="/static/icons/favicon.png">
+    <style>
+        :root { --brand: #005da2; --text: #1f2933; --muted: #5f6b7a; --line: #d5dbe3;
+                --bg: #eef2f6; --card: #ffffff; --bad: #b42318; --bad-bg: #fdecea;
+                --ok: #146c43; --ok-bg: #e7f5ee; --warn: #8a5300; --warn-bg: #fff4e0; }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+               padding: 16px; background: var(--bg); color: var(--text); font-family: Arial, sans-serif; }
+        .card { width: 100%; max-width: 480px; background: var(--card); border-radius: 10px;
+                box-shadow: 0 8px 30px rgba(0, 40, 80, .12); padding: 28px; }
+        .logo { height: 28px; display: block; margin-bottom: 18px; }
+        h1 { font-size: 1.25rem; margin: 0 0 6px; }
+        p { margin: 0 0 16px; color: var(--muted); font-size: .92rem; line-height: 1.45; }
+        .status { border-radius: 6px; padding: 10px 12px; font-size: .9rem; margin-bottom: 18px; }
+        .status.bad  { background: var(--bad-bg);  color: var(--bad); }
+        .status.ok   { background: var(--ok-bg);   color: var(--ok); }
+        .status.warn { background: var(--warn-bg); color: var(--warn); }
+        label { display: block; font-size: .8rem; font-weight: bold; color: var(--muted);
+                text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+        .machine { display: flex; gap: 8px; margin-bottom: 18px; }
+        .machine code { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+                        padding: 9px 10px; font-family: Consolas, 'Courier New', monospace; font-size: .95rem; }
+        textarea { width: 100%; min-height: 92px; resize: vertical; border: 1px solid var(--line);
+                   border-radius: 6px; padding: 9px 10px; font-family: Consolas, 'Courier New', monospace;
+                   font-size: .82rem; word-break: break-all; }
+        textarea:focus { outline: 2px solid var(--brand); border-color: transparent; }
+        .actions { display: flex; gap: 8px; margin-top: 14px; }
+        button { border: none; border-radius: 6px; padding: 10px 16px; font-size: .92rem; cursor: pointer;
+                 background: var(--brand); color: #fff; }
+        button.secondary { background: transparent; color: var(--brand); border: 1px solid var(--brand); }
+        button:disabled { opacity: .6; cursor: default; }
+        .details { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px;
+                   font-size: .85rem; color: var(--muted); }
+        .details div { display: flex; justify-content: space-between; padding: 3px 0; }
+        .details b { color: var(--text); font-weight: normal; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <img class="logo" src="/static/images/skew-logo-horizontal.png" alt="SKEW">
 
-{% block content %}
-    <div id="licenseModal" class="license-modal" style="display: block;">
-        <div class="license-modal-content">
-            <h2>Activate License</h2>
-            <div class="form-group">
-                <label for="licenseKey">Enter License Key:</label>
-                <input type="text" id="licenseKey" placeholder="" autocomplete="off">
-            </div>
-            <div class="license-modal-actions">
-                <button id="activateBtn" class="inv-button">Activate</button>
-                <button id="launchBtn" class="inv-button" style="display:none;">Launch</button>
-            </div>
+    <h1>Activate licence</h1>
+    <p>Send the Machine ID below to Prolite Automation. You will receive a
+       <strong>Demo</strong> (30 days) or <strong>Purchased</strong> licence key for this machine.</p>
+
+    {% if licence.valid %}
+        <div class="status {{ 'warn' if licence.days_left is not none else 'ok' }}">
+            {{ licence.message }}{% if licence.days_left is not none %} &ndash; {{ licence.days_left }} days left{% endif %}.
+            {% if not can_change %}An admin must log in to change the key.{% endif %}
         </div>
+    {% else %}
+        <div class="status bad">{{ licence.message }}</div>
+    {% endif %}
+
+    <label>Machine ID</label>
+    <div class="machine">
+        <code id="machineId">{{ licence.machine_id }}</code>
+        <button type="button" class="secondary" id="copyBtn">Copy</button>
     </div>
 
-    <script>
-        const activateBtn = document.getElementById('activateBtn');
-        const launchBtn = document.getElementById('launchBtn');
-        const licenseKeyInput = document.getElementById('licenseKey');
+    {% if can_change %}
+    <label for="licenseKey">Licence key</label>
+    <textarea id="licenseKey" placeholder="SKEW-..." autocomplete="off" spellcheck="false"></textarea>
+    <div class="actions">
+        <button type="button" id="activateBtn">Activate</button>
+        {% if licence.valid %}<button type="button" class="secondary" onclick="location.href='/dashboard'">Back to app</button>{% endif %}
+    </div>
+    {% endif %}
 
-        activateBtn.addEventListener('click', () => {
-            const licenseKey = licenseKeyInput.value.trim();
-            if (!licenseKey) return alert("Please enter license key");
+    {% if licence.type %}
+    <div class="details">
+        <div><span>Licence</span><b>{{ licence.type_name }}</b></div>
+        {% if licence.customer %}<div><span>Licensed to</span><b>{{ licence.customer }}</b></div>{% endif %}
+        <div><span>Expires</span><b>{{ licence.expires.strftime('%d-%m-%Y') if licence.expires else 'Never' }}</b></div>
+    </div>
+    {% endif %}
+</div>
 
-            fetch('/activate_license', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ licenseKey: licenseKey })
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.success) {
-                    alert("✅ Activation successful");
-                    licenseKeyInput.disabled = true;
-                    activateBtn.style.display = 'none';
-                    launchBtn.style.display = 'inline-block';
-                } else {
-                    alert("❌ " + (data.message || "Activation failed"));
-                }
+<script>
+    document.getElementById('copyBtn').addEventListener('click', async (ev) => {
+        const text = document.getElementById('machineId').textContent.trim();
+        try { await navigator.clipboard.writeText(text); }
+        catch {   // clipboard API needs https/localhost - fall back to selecting the text
+            const r = document.createRange(); r.selectNode(document.getElementById('machineId'));
+            getSelection().removeAllRanges(); getSelection().addRange(r); document.execCommand('copy');
+        }
+        ev.target.textContent = 'Copied'; setTimeout(() => ev.target.textContent = 'Copy', 1500);
+    });
+
+    const activateBtn = document.getElementById('activateBtn');
+    activateBtn && activateBtn.addEventListener('click', async () => {
+        const key = document.getElementById('licenseKey').value.trim();
+        if (!key) return alert('Please paste the licence key');
+        activateBtn.disabled = true;
+        try {
+            const res = await fetch('/activate_license', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ licenseKey: key })
             });
-        });
-
-        launchBtn.addEventListener('click', () => {
-            window.location.href = '/dashboard';
-        });
-    </script>
-{% endblock %}
+            const data = await res.json();
+            if (data.success) { alert(data.message); location.href = '/dashboard'; }
+            else alert(data.message || 'Activation failed');
+        } catch (e) { alert('Could not reach the server: ' + e); }
+        activateBtn.disabled = false;
+    });
+</script>
+</body>
+</html>

@@ -12,11 +12,12 @@ from database import postgres
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-BACKUP_ROOT = os.path.join(BASE_DIR, "Backups")
+# Docker: BACKUP_DIR points at a mounted volume so backups survive image updates
+BACKUP_ROOT = os.environ.get("BACKUP_DIR", os.path.join(BASE_DIR, "Backups"))
 
 CUSTOM_BACKUP_FOLDER = os.path.join(BACKUP_ROOT, "Custom")
 
-BACKUP_LOG_PATH = os.path.join(BASE_DIR, "backup_log.json")
+BACKUP_LOG_PATH = os.environ.get("BACKUP_LOG_PATH", os.path.join(BASE_DIR, "backup_log.json"))
 
 STORAGE_QUOTA_GB = 10
 

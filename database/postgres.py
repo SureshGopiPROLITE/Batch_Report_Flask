@@ -2,7 +2,6 @@ from sqlalchemy import create_engine
 import shutil
 import os
 import subprocess
-from tkinter import Tk, filedialog
 import psycopg2
 import pandas as pd
 from datetime import datetime, timedelta
@@ -13,11 +12,13 @@ import os
 # ---------------------------------------------------------------------------
 # Connection settings
 # ---------------------------------------------------------------------------
-DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_PORT = os.environ.get("DB_PORT", "5434")
-DB_NAME = os.environ.get("DB_NAME", "PLCDB2")
-DB_USER = os.environ.get("DB_USER", "postgres")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "12345678")
+from config.config import DB_CONFIG
+
+DB_HOST = DB_CONFIG["host"]
+DB_PORT = DB_CONFIG["port"]
+DB_NAME = DB_CONFIG["dbname"]
+DB_USER = DB_CONFIG["user"]
+DB_PASSWORD = DB_CONFIG["password"]
 
 ENGINE_URL = (
     f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}"
@@ -50,6 +51,34 @@ def postgres():  # Keep same name so the rest of the project works unchanged
     engineConRead = engine.connect()
     engineConWrite = engine.connect()
     return cursorRead, cursorWrite, engineConRead, engineConWrite, conn
+
+
+def connect():
+    """Single psycopg2 connection, for work that must commit as one transaction."""
+    return psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        database=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+    )
+
+
+def ensure_indexes():
+    """Idempotent. plc_data grows by ~50 rows per batch; without these, every
+    batch-number lookup and every report does a full table scan."""
+    statements = [
+        'CREATE INDEX IF NOT EXISTS ix_plc_data_timestamp ON plc_data ("TimeStamp")',
+        'CREATE INDEX IF NOT EXISTS ix_plc_data_batchno ON plc_data ("BatchNo")',
+        'CREATE INDEX IF NOT EXISTS ix_batches_timestamp ON "Batches" ("TimeStamp")',
+    ]
+    conn = connect()
+    try:
+        with conn, conn.cursor() as cur:
+            for sql in statements:
+                cur.execute(sql)
+    finally:
+        conn.close()
 
 
 def close_postgres(cursorRead, cursorWrite, engineConRead, engineConWrite, conn):
@@ -91,6 +120,8 @@ def calculate_silo_diff(dfPlcdb: pd.DataFrame) -> pd.DataFrame:
 
 def backup_database():
     try:
+        from tkinter import Tk, filedialog  # desktop-only dialog
+
         # Hide the root window
         root = Tk()
         root.withdraw()

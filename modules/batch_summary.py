@@ -36,6 +36,48 @@ def clean_plc_datetime(date_string):
 
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
+def batch_summary_rows(dfPlcdb):
+    """plc_data rows (TimeStamp, Name, DataType, Value, Category, BatchNo,
+    DailyBatchNo) for the batch summary; [] if the PLC dates are unusable."""
+    if dfPlcdb.empty:
+        return []
+
+    df = dfPlcdb.copy()
+    df["Value_num"] = pd.to_numeric(df["Value"], errors="coerce")
+
+    batch_no = int(df["BatchNo"].iloc[0])
+    daily_batch_no = int(df["DailyBatchNo"].iloc[0])
+
+    actual_total = float(df.loc[df["Name"] == "ActualWeight", "Value_num"].sum())
+    set_total = float(df.loc[df["Name"] == "SetWeight", "Value_num"].sum())
+
+    start_rows = df.loc[df["Name"] == START_NAME, "Value"]
+    end_rows = df.loc[df["Name"] == END_NAME, "Value"]
+    if start_rows.empty or end_rows.empty:
+        print(" Start/End Date Time tags missing - summary skipped")
+        return []
+
+    start = pd.to_datetime(clean_plc_datetime(start_rows.iloc[-1]), errors="coerce")
+    end = pd.to_datetime(clean_plc_datetime(end_rows.iloc[-1]), errors="coerce")
+    if pd.isna(start) or pd.isna(end):
+        print(" Invalid Start/End Date Time - summary skipped")
+        return []
+
+    summary = {
+        "TotalBatchActualWeight": actual_total,
+        "TotalBatchSetWeight": set_total,
+        "BatchAccuracy": float(batch_accuracy(actual_total, set_total)),
+        "BatchTimeMinutes": float(round((end - start).total_seconds() / 60, 2)),
+    }
+    timestamp = end.strftime("%Y-%m-%d %H:%M:%S")
+
+    return [
+        (timestamp, name, "NUMBER", None if pd.isna(value) else float(value),
+         "Summary", batch_no, daily_batch_no)
+        for name, value in summary.items()
+    ]
+
+
 def calculate_batch_summary(dfPlcdb):
 
     if dfPlcdb.empty:

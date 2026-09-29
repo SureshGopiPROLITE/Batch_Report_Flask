@@ -1,6 +1,7 @@
 from flask import (Flask, render_template, request, redirect, url_for, session, jsonify, abort, g, send_file, Response,)
 from werkzeug.security import check_password_hash, generate_password_hash
 import io
+import logging
 import json
 import os
 import tempfile
@@ -19,7 +20,7 @@ from sqlalchemy import text
 # PLC Object
 plc = snap7.client.Client()
 # Modules
-from auth import authLog, authMac
+from auth import authLog, authMac, licence
 from config import sqliteCon
 from database import postgres
 
@@ -30,7 +31,8 @@ from modules.db_management import (
     record_backup_event,
 )
 app = Flask(__name__)
-app.secret_key = '4f3d6e9a5f4b1c8d7e6a2b3c9d0e8f1a5b7c2d4e6f9a1b3c8d0e6f2a9b1d3c4'
+app.secret_key = os.environ.get(
+    'SECRET_KEY', '4f3d6e9a5f4b1c8d7e6a2b3c9d0e8f1a5b7c2d4e6f9a1b3c8d0e6f2a9b1d3c4')
 
 
 def open_browser():
@@ -1714,7 +1716,58 @@ def export_material_data():
 
 @app.route('/about')
 def about():
-    return render_template('about.html')
+    return render_template('about.html', app_version=os.environ.get('APP_VERSION', 'dev'))
+
+
+# --------------------------------- LICENCE ----------------------------------
+# Paths that work without a licence: the activation screen itself, static
+# files, and the status probe used by the Docker health check.
+LICENCE_OPEN_PATHS = ('/static/', '/activation', '/activate_license', '/api/licence', '/plc_status')
+LICENCE_ADMIN_ROLES = ('admin', 'superadmin')
+
+
+@app.before_request
+def licence_gate():
+    if request.path.startswith(LICENCE_OPEN_PATHS):
+        return None
+    if licence.status()["valid"]:
+        return None
+    # Browser page loads go to the activation screen; fetch()/API calls get JSON.
+    # (Browsers list text/html in Accept; fetch() sends */*. Don't use
+    # accept_mimetypes.best - for Chrome/Edge it is application/signed-exchange.)
+    is_page_load = request.method == 'GET' and 'text/html' in request.headers.get('Accept', '')
+    if not is_page_load:
+        return jsonify(success=False, licence=False, message=licence.status()["message"]), 403
+    return redirect(url_for('activation'))
+
+
+@app.route('/activation')
+def activation():
+    status = licence.status(force=True)
+    # First activation (or an expired demo): anyone at the machine may enter a key.
+    # Replacing a working key (e.g. demo -> purchased) needs an admin login.
+    can_change = not status["valid"] or session.get('role') in LICENCE_ADMIN_ROLES
+    return render_template('activation.html', licence=status, can_change=can_change)
+
+
+@app.route('/activate_license', methods=['POST'])
+def activate_license():
+    if licence.status()["valid"] and session.get('role') not in LICENCE_ADMIN_ROLES:
+        return jsonify(success=False, message="Only an admin can change the licence key"), 403
+
+    key = (request.get_json(silent=True) or {}).get('licenseKey', '')
+    success, message = licence.activate(key)
+    if success and not monitor.is_running():
+        monitor.start_auto_connect()     # start PLC logging now that we are licensed
+    return jsonify(success=success, message=message), (200 if success else 400)
+
+
+@app.route('/api/licence')
+def licence_info():
+    status = licence.status()
+    return jsonify(valid=status["valid"], type=status["type_name"], message=status["message"],
+                   days_left=status["days_left"], machine_id=status["machine_id"],
+                   expires=status["expires"].isoformat() if status["expires"] else None)
 
 
 @app.route('/super_admin')
@@ -1948,7 +2001,8 @@ def stop_plc():
 
 @app.route('/plc_status')
 def plc_status():
-    return jsonify(status="connected" if monitor.is_running() else "disconnected")
+    # connected | reconnecting (PLC link dropped, monitor retrying) | disconnected
+    return jsonify(status=monitor.get_status())
 
 
 @app.route('/api/settings/get_plc_config')
@@ -2046,12 +2100,16 @@ def load_user():
 
 @app.context_processor
 def inject_user():
-    return dict(user=session.get('username'), role=session.get('role'))
+    return dict(user=session.get('username'), role=session.get('role'), licence=licence.status())
 
 
 if __name__ == "__main__":
     # Try once at startup. If the PLC is off or unreachable it just stays
     # "Disconnected" (see plc_monitor.log) and the user can press Connect later.
+    try:
+        postgres.ensure_indexes()
+    except Exception:
+        logging.exception("Could not create database indexes")
     monitor.start_auto_connect()
 
     app.run(debug=True, use_reloader=False)
