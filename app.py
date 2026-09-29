@@ -1299,11 +1299,12 @@ def download_RecipeTag():
     try:
         # Get database connection
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+        engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
 
         # Read table into DataFrame
         df = pd.read_sql_query(
             'SELECT * FROM "RecipeTagName"',
-            conn
+            engine
         )
 
         # Create Excel file in memory
@@ -1462,6 +1463,7 @@ def upload_plc_db():
 
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+        
 
         if 'file' not in request.files:
             return jsonify({
