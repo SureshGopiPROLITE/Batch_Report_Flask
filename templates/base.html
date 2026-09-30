@@ -24,6 +24,11 @@
 
         <div class="navbar-right">
             {% if user %}
+                <div class="nav-plc-status" title="PLC connection status">
+                    <span id="navStatusDot" class="status-dot disconnected"></span>
+                    <span id="navStatusText">PLC: Checking…</span>
+                </div>
+
                 <div class="avatar" id="avatarBtn">{{ user[0].upper() }}</div>
 
                 <div id="avatarDropdown" class="avatar-dropdown">
@@ -296,5 +301,31 @@
             } catch (e) { /* server restarting - try again next time */ }
         }, 5 * 60 * 1000);
     </script>
+    {% if user %}
+    <script>
+    // PLC connection status in the navbar (same /plc_status feed as the settings page)
+    function updateNavPlcStatus(isConnected, reconnecting = false) {
+        const dot = document.getElementById("navStatusDot");
+        const text = document.getElementById("navStatusText");
+        if (!dot || !text) return;
+        dot.className = "status-dot " + (isConnected ? "connected" : "disconnected");
+        text.textContent = "PLC: " + (isConnected ? "Connected"
+                         : reconnecting ? "Reconnecting…" : "Disconnected");
+    }
+
+    async function refreshNavPlcStatus() {
+        try {
+            const r = await fetch("/plc_status");
+            const d = await r.json();
+            updateNavPlcStatus(d.status === "connected", d.status === "reconnecting");
+        } catch (e) {
+            updateNavPlcStatus(false);
+        }
+    }
+
+    refreshNavPlcStatus();
+    setInterval(refreshNavPlcStatus, 5000);
+    </script>
+    {% endif %}
 </body>
 </html>

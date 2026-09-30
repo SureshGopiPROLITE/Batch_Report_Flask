@@ -11,7 +11,7 @@ from flask import session
 import psycopg2
 from psycopg2 import sql
 import pandas as pd
-from modules.batch_summary import calculate_batch_summary
+from modules.batch_summary import calculate_batch_summary, clean_plc_datetime
 
 # === Logging Setup ===
 logging.basicConfig(
@@ -265,6 +265,29 @@ def plc_data_process(batch_no):
 
 import pandas as pd
 
+
+def add_material_times(df_pivot):
+    """Per-silo StartTime / EndTime (shown as HH:MM:SS) and their Duration.
+    Batches logged before these tags existed get empty values."""
+    for col in ("StartTime", "EndTime"):
+        if col not in df_pivot.columns:
+            df_pivot[col] = None
+
+    start = pd.to_datetime(df_pivot["StartTime"].map(clean_plc_datetime), errors="coerce")
+    end = pd.to_datetime(df_pivot["EndTime"].map(clean_plc_datetime), errors="coerce")
+
+    def fmt_duration(seconds):
+        if pd.isna(seconds) or seconds < 0:
+            return ""
+        seconds = int(seconds)
+        return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+    df_pivot["Duration"] = (end - start).dt.total_seconds().map(fmt_duration)
+    df_pivot["StartTime"] = start.dt.strftime("%H:%M:%S").fillna("")
+    df_pivot["EndTime"] = end.dt.strftime("%H:%M:%S").fillna("")
+    return df_pivot
+
+
 def report_data_process(batch_no):
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
@@ -378,8 +401,12 @@ def report_data_process(batch_no):
             "Tolerance",
             "CoarseSpeed",
             "FineSpeed",
+            "StartTime",
+            "EndTime",
+            "Duration",
         ]
 
+        df_pivot = add_material_times(df_pivot)
         df_pivot = df_pivot[column_order]
 
         if "SiloNo" in df_pivot.columns:

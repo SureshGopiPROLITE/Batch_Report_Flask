@@ -80,6 +80,7 @@ def generate_pdf_report(
         "recipe_name": get_value("Recipe Name"),
         "start_time": get_value("Start Date Time"),
         "end_time": get_value("End Date Time"),
+        "shift": get_value("Shift"),
         "batch_no": batch_no,
         "time_taken": get_cal_value("BatchTimeMinutes"),
         "total_set_weight": get_cal_value("TotalBatchSetWeight"),
@@ -158,6 +159,7 @@ def generate_excel_report(
         "recipe_name": get_value("Recipe Name"),
         "start_time": get_value("Start Date Time"),
         "end_time": get_value("End Date Time"),
+        "shift": get_value("Shift"),
         "batch_no": batch_no,
         "time_taken": get_cal_value("BatchTimeMinutes"),
         "total_set_weight": get_cal_value("TotalBatchSetWeight"),
@@ -197,6 +199,7 @@ def generate_excel_report(
         ("Batch No",details["batch_no"]),
         ("Start Time",details["start_time"]),
         ("End Time",details["end_time"]),
+        ("Shift",details["shift"]),
         ("Total Set Weight (Kg)",
         df_pivot["SetWeight"].sum()),
         ("Total Actual Weight (Kg)",round(df_pivot["ActualWeight"].sum(),2))
@@ -236,6 +239,11 @@ def generate_excel_report(
             "CoarseSpeed",
             "FineSpeed"
         ]
+    table_headers += [
+        "Start Time",
+        "End Time",
+        "Duration (hh:mm:ss)"
+    ]
     ws.append(table_headers)
 
     # ======================================================
@@ -285,6 +293,11 @@ def generate_excel_report(
                     ""
                 )
             ]
+        row_data += [
+            row.get("StartTime", ""),
+            row.get("EndTime", ""),
+            row.get("Duration", "")
+        ]
         ws.append(row_data)
 
     # ======================================================
@@ -328,7 +341,10 @@ def generate_html_report(
             <td>{row.get("CoarseSpeed", "")}</td>
             <td>{row.get("FineSpeed", "")}</td>
             """
-        data_rows += """
+        data_rows += f"""
+            <td>{row.get("StartTime", "")}</td>
+            <td>{row.get("EndTime", "")}</td>
+            <td>{row.get("Duration", "")}</td>
         </tr>
         """
 
@@ -398,10 +414,10 @@ def generate_html_report(
             }}
             td,
             th {{
-                padding: 10px;
+                padding: 8px 6px;
                 text-align: center;
                 border: 1px solid #ddd;
-                font-size: 11pt;
+                font-size: 10pt;
             }}
             th {{
                 background-color: #f2f2f2;
@@ -460,6 +476,9 @@ def generate_html_report(
                     <tr>
                         <td><b>End Time:</b></td>
                         <td>{details['end_time']}</td>
+
+                        <td><b>Shift:</b></td>
+                        <td>{details['shift']}</td>
                     </tr>
                 </table>
             </div>
@@ -474,6 +493,9 @@ def generate_html_report(
                 <th>Difference (Kg)</th>
                 <th>Tolerance (Kg)</th>
                 {speed_headers}
+                <th>Start Time</th>
+                <th>End Time</th>
+                <th>Duration (hh:mm:ss)</th>
             </tr>
             {data_rows}
         </table>

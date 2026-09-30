@@ -208,6 +208,8 @@ def read_bulk_plc_data(plc, dfPlcdb):
                 # Format PLC Date/Time (an empty/invalid date becomes None)
                 if row["Name"] in ["Start Date Time", "End Date Time"]:
                     value = clean_plc_datetime(value)
+                elif row["Name"] in ["StartTime", "EndTime"]:
+                    value = clean_plc_datetime(value) or (value or "")
 
                 dfPlcdb.at[idx, "Value"] = value
 

@@ -268,6 +268,24 @@ body {
     position: relative;
 }
 
+.nav-plc-status {
+    display: flex;
+    align-items: center;
+    padding: 6px 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 20px;
+    background: #f8fafc;
+    font-size: 14px;
+    font-weight: 500;
+    color: #1f2937;
+    white-space: nowrap;
+}
+
+.nav-plc-status .status-dot {
+    width: 10px;
+    height: 10px;
+}
+
 .navbar-right button {
     width: 12vh;
     height: 5vh;
@@ -1856,6 +1874,15 @@ tr.editing input:focus {
     margin:0;
     color:#005da2;
     font-size:20px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+}
+
+.card-header h3 .card-icon{
+    width:22px;
+    height:22px;
+    flex-shrink:0;
 }
 
 .card-body{
