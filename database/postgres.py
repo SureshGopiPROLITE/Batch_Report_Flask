@@ -65,12 +65,14 @@ def connect():
 
 
 def ensure_indexes():
-    """Idempotent. plc_data grows by ~50 rows per batch; without these, every
-    batch-number lookup and every report does a full table scan."""
+    """Idempotent startup schema upgrades. plc_data grows by ~50 rows per batch;
+    without the indexes every batch-number lookup and report is a full scan.
+    "Seq" is the user-arranged step order of a recipe's rows (download order)."""
     statements = [
         'CREATE INDEX IF NOT EXISTS ix_plc_data_timestamp ON plc_data ("TimeStamp")',
         'CREATE INDEX IF NOT EXISTS ix_plc_data_batchno ON plc_data ("BatchNo")',
         'CREATE INDEX IF NOT EXISTS ix_batches_timestamp ON "Batches" ("TimeStamp")',
+        'ALTER TABLE "recipeData" ADD COLUMN IF NOT EXISTS "Seq" integer',
     ]
     conn = connect()
     try:

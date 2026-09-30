@@ -143,6 +143,10 @@ def info_value(dfInfo, particular, default=None):
     return default if match.empty else match.iloc[0]
 
 
+DRIVER_SIEMENS, DRIVER_ROCKWELL = 1, 2
+DRIVER_NAMES = {DRIVER_SIEMENS: "Siemens", DRIVER_ROCKWELL: "Rockwell"}
+
+
 def get_saved_node():
     dfInfo, _ = load_plc_tables()
     node = info_value(dfInfo, "Plc_IP")
@@ -151,19 +155,72 @@ def get_saved_node():
     return str(node).strip()
 
 
+def get_saved_driver(node=None):
+    """Driver chosen in Settings (Info_db 'Plc_Driver'); older databases without
+    it fall back to the address format."""
+    try:
+        dfInfo, _ = load_plc_tables()
+        driver = int(info_value(dfInfo, "Plc_Driver", 0) or 0)
+        if driver in DRIVER_NAMES:
+            return driver
+    except Exception:
+        logging.exception("Could not read saved PLC driver")
+    return guess_driver(node if node is not None else get_saved_node())
+
+
+def save_plc_config(driver=None, node=None):
+    """Remembers the driver / address from Settings, so auto-connect after a
+    restart and recipe download use the same PLC as the Connect button."""
+    values = []
+    if driver is not None:
+        values.append(("Plc_Driver", str(int(driver))))
+    if node:
+        values.append(("Plc_IP", str(node).strip()))
+    if not values:
+        return
+    conn = postgres.connect()
+    try:
+        with conn, conn.cursor() as cur:
+            for particular, value in values:
+                cur.execute('UPDATE "Info_db" SET "Info" = %s WHERE "Particulars" = %s', (value, particular))
+                if cur.rowcount == 0:
+                    cur.execute('INSERT INTO "Info_db" ("Id", "Particulars", "Info") '
+                                'SELECT COALESCE(MAX("Id"), 0) + 1, %s, %s FROM "Info_db"',
+                                (particular, value))
+    finally:
+        conn.close()
+
+
 # === Connection helpers ===
 def guess_driver(node):
     """'ip,rack,slot' -> Siemens (1), plain IP -> Rockwell (2)."""
-    return 1 if str(node).count(',') == 2 else 2
+    return DRIVER_SIEMENS if str(node).count(',') == 2 else DRIVER_ROCKWELL
+
+
+def _resolve(host):
+    """Hostname -> IP (snap7 needs a numeric IP). e.g. host.docker.internal
+    lets the app in Docker reach a PLC simulator on the Windows PC."""
+    try:
+        return socket.gethostbyname(host)
+    except OSError:
+        return host
 
 
 def parse_node(server, node):
     parts = [p.strip() for p in str(node).split(',')]
-    if server == 1:
+    if server == DRIVER_SIEMENS:
         if len(parts) != 3:
-            raise ValueError('Siemens format must be "ip,rack,slot" e.g. 192.168.0.1,0,1')
-        return parts[0], int(parts[1]), int(parts[2])
-    return parts[0], None, None
+            raise ValueError('Siemens address must be "ip,rack,slot" e.g. 192.168.0.1,0,1')
+        try:
+            return _resolve(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            raise ValueError('Siemens rack and slot must be numbers, e.g. 192.168.0.1,0,1')
+    if server == DRIVER_ROCKWELL:
+        if len(parts) != 1 or not parts[0]:
+            raise ValueError('Rockwell address is just the IP, e.g. 192.168.0.10 '
+                             '(the "ip,rack,slot" form is for Siemens)')
+        return _resolve(parts[0]), None, None
+    raise ValueError(f"Unknown PLC driver {server} (1 = Siemens, 2 = Rockwell)")
 
 
 def is_plc_reachable(ip, server, timeout=2.0):
@@ -199,7 +256,7 @@ def _open_plc(server, node, life_rows):
             plc.get_cpu_state()
             alive = snap7_plc.lifeCounter(plc, life_rows)
         else:
-            plc = pylogix.connectABPLC(node)
+            plc = pylogix.connectABPLC(parse_node(DRIVER_ROCKWELL, node)[0])
             result = plc.GetPLCTime()
             if result.Status != "Success":
                 raise ConnectionError(result.Status)
@@ -266,7 +323,11 @@ def start_monitoring(server, node=None):
             args=(plc, server, node, dfPlcdb, df_trigger, stop_event),
             daemon=True)
         plc_thread.start()
-        logging.info("PLC Connected Successfully")
+        try:
+            save_plc_config(server, node)
+        except Exception:
+            logging.exception("Could not save PLC driver/address")
+        logging.info(f"PLC Connected Successfully ({DRIVER_NAMES.get(server)} {node})")
         return True, "PLC Connected Successfully"
 
 
@@ -422,7 +483,7 @@ def _auto_connect():
     while not is_running():
         try:
             node = get_saved_node()
-            ok, msg = start_monitoring(guess_driver(node), node)
+            ok, msg = start_monitoring(get_saved_driver(node), node)
             logging.info(f"Auto-connect: {ok} - {msg}")
             if ok:
                 return
@@ -432,9 +493,18 @@ def _auto_connect():
         wait = min(wait * 2, AUTO_CONNECT_MAX_WAIT)
 
 
+_auto_connect_thread = None
+
+
 def start_auto_connect():
-    """Connect in the background at app start, retrying until the PLC answers."""
-    threading.Thread(target=_auto_connect, daemon=True).start()
+    """Connect in the background at app start, retrying until the PLC answers.
+    Only one retry loop runs at a time (startup and licence activation both call this)."""
+    global _auto_connect_thread
+    with start_lock:
+        if _auto_connect_thread is not None and _auto_connect_thread.is_alive():
+            return
+        _auto_connect_thread = threading.Thread(target=_auto_connect, daemon=True)
+        _auto_connect_thread.start()
 
 
 # === Batch logging ===

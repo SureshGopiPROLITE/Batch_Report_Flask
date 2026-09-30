@@ -329,7 +329,7 @@ def get_recipe_table(category):
         FROM "recipeData" r
         LEFT JOIN "MaterialData" m ON r."SiloNo" = m."SiloNo"
         WHERE r."Category" = %s
-
+        ORDER BY r."Seq" NULLS LAST, r."Index"
     """
 
     cursorRead.execute(query, (category,))
@@ -337,6 +337,50 @@ def get_recipe_table(category):
     cols = [desc[0] for desc in cursorRead.description]
     conn.close()
     return jsonify([dict(zip(cols, row)) for row in data])
+
+
+def normalize_recipe_seq(cursor, category):
+    """Number a recipe's rows 1..n in their current order (rows saved before
+    ordering existed have no Seq and keep their creation order)."""
+    cursor.execute("""
+        UPDATE "recipeData" r SET "Seq" = o.rn
+        FROM (SELECT ctid, ROW_NUMBER() OVER (ORDER BY "Seq" NULLS LAST, "Index") AS rn
+              FROM "recipeData" WHERE "Category" = %s) o
+        WHERE r.ctid = o.ctid
+    """, (category,))
+
+
+@app.route("/api/recipes/<string:category>/order", methods=["PUT"])
+def reorder_recipe(category):
+    """Saves the step order: body {"order": [Index, Index, ...]} top to bottom.
+    This is the order the recipe is written to the PLC."""
+    if 'username' not in session or session.get('role') == 'operator':
+        return jsonify({"success": False, "error": "Access denied"}), 403
+
+    order = (request.get_json(silent=True) or {}).get("order") or []
+    try:
+        order = [int(i) for i in order]
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "order must be a list of row indexes"}), 400
+
+    conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+    try:
+        cursorRead.execute('SELECT "Index" FROM "recipeData" WHERE "Category" = %s', (category,))
+        existing = sorted(r[0] for r in cursorRead.fetchall())
+        if sorted(order) != existing:
+            return jsonify({"success": False, "error": "Recipe changed - reload the page and try again"}), 409
+
+        for seq, index in enumerate(order, start=1):
+            cursorWrite.execute('UPDATE "recipeData" SET "Seq" = %s WHERE "Index" = %s AND "Category" = %s',
+                                (seq, index, category))
+        conn.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        conn.rollback()
+        print(" Reorder error:", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        conn.close()
 
 
 @app.route("/api/recipes_data/add_row", methods=["POST"])
@@ -377,12 +421,14 @@ def add_row():
         conn.close()
         return jsonify({"success": False, "error": "silo_already_exists"}), 409
 
-    # 3 Insert new recipe row
+    # 3 Insert new recipe row as the last step
     try:
+        normalize_recipe_seq(cursorWrite, category)
         cursorWrite.execute("""
             INSERT INTO "recipeData"
-                ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "Category", "CoarseSpeed", "FineSpeed")
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "Category", "CoarseSpeed", "FineSpeed", "Seq")
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
+                    (SELECT COALESCE(MAX("Seq"), 0) + 1 FROM "recipeData" WHERE "Category" = %s))
         """, (
             silo,
             material_name,
@@ -392,6 +438,7 @@ def add_row():
             category,
             data.get("CoarseSpeed"),
             data.get("FineSpeed"),
+            category,
         ))
 
         conn.commit()
@@ -432,6 +479,7 @@ def export_recipe_data():
             FROM "recipeData" r
             LEFT JOIN "MaterialData" m ON r."SiloNo" = m."SiloNo"
             WHERE r."Category" = %s
+            ORDER BY r."Seq" NULLS LAST, r."Index"
         """
 
         df = pd.read_sql_query(query, conn, params=(category,))
@@ -498,8 +546,8 @@ def import_recipe_excel():
         )
         conn.commit()
 
-        # 3 Insert all rows into recipeData
-        for _, row in df.iterrows():
+        # 3 Insert all rows into recipeData, in the Excel row order
+        for seq, (_, row) in enumerate(df.iterrows(), start=1):
             silo = str(row["SiloNo"]).strip()
 
             # Validate silo exists in MaterialData
@@ -512,8 +560,8 @@ def import_recipe_excel():
 
             cursorWrite.execute("""
                 INSERT INTO "recipeData"
-                    ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed", "Category")
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed", "Category", "Seq")
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 silo,
                 mr[0],                              # MaterialName from MaterialData
@@ -522,7 +570,8 @@ def import_recipe_excel():
                 row["Tolerance"],
                 row["CoarseSpeed"],
                 row["FineSpeed"],
-                category
+                category,
+                seq
             ))
 
         conn.commit()
@@ -1328,6 +1377,25 @@ def download_RecipeTag():
         return {"error": str(e)}, 500
 
 
+# Columns each driver needs in the uploaded tag tables (Settings -> Configuration)
+PLC_TAG_COLUMNS = {
+    monitor.DRIVER_SIEMENS: ["Name", "Category", "db_number", "start_offset", "data_type"],
+    monitor.DRIVER_ROCKWELL: ["Name", "Category", "Tag_name", "Data_type"],
+}
+
+
+def tag_table_error(df, required, what):
+    """Message if an uploaded tag table does not suit the driver chosen in Settings."""
+    driver = monitor.get_saved_driver()
+    missing = [c for c in required[driver] if c not in df.columns]
+    if not missing:
+        return None
+    return (f"This {what} file is not a {monitor.DRIVER_NAMES[driver]} tag table "
+            f"(missing column {', '.join(missing)}). Settings driver is "
+            f"{monitor.DRIVER_NAMES[driver]} - choose the right driver first, or upload "
+            f"the {monitor.DRIVER_NAMES[driver]} file.")
+
+
 @app.route('/upload-RecipeTag', methods=['POST'])
 def upload_RecipeTag():
     try:
@@ -1347,7 +1415,11 @@ def upload_RecipeTag():
 
         # Read Excel file
         dfPlcExcel = pd.read_excel(file)
-        print(dfPlcExcel)
+
+        required = {d: ["Name", "SiloNo"] + cols for d, cols in recipewrite.TAG_COLUMNS.items()}
+        error = tag_table_error(dfPlcExcel, required, "recipe tag")
+        if error:
+            return jsonify({"success": False, "message": error}), 400
 
         # Insert into Postgres
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
@@ -1481,26 +1553,11 @@ def upload_plc_db():
                 "message": "No file selected"
             }), 400
 
-        # Driver index from frontend
-        server = int(request.form.get("server", 0))
-
-        # Read Excel
+        # Read Excel; it must match the driver chosen in Settings
         dfPlcExcel = pd.read_excel(file)
-
-        if server == 2:
-            dfPlcExcel["ns"] = dfPlcExcel["ns"].astype(str)
-
-            dfPlcExcel["node_identifier"] = dfPlcExcel.apply(
-                lambda row: (
-                    f'ns={row["ns"]};s={row["channel"]}.'
-                    f'{row["device"]}.{row["Name"]}'
-                ),
-                axis=1
-            )
-
-            node_ids = dfPlcExcel["node_identifier"].to_numpy()
-
-            print("Node IDs:", node_ids)
+        error = tag_table_error(dfPlcExcel, PLC_TAG_COLUMNS, "PLC tag")
+        if error:
+            return jsonify({"success": False, "message": error}), 400
 
         # Insert into Postgres
         postgres.insert_data_into_sqlite(
@@ -2009,7 +2066,7 @@ def plc_status():
 def get_plc_config():
     try:
         node = monitor.get_saved_node()
-        return jsonify(station_ip=node, driver=monitor.guess_driver(node))
+        return jsonify(station_ip=node, driver=monitor.get_saved_driver(node))
     except Exception:
         return jsonify(station_ip="", driver=1)
 
@@ -2058,33 +2115,41 @@ def openXl():
         }), 500
 
 
+@app.route('/api/recipe_download/preview', methods=['POST'])
+def recipe_download_preview():
+    """What will be written, for the confirmation popup. Does not touch the PLC."""
+    data = request.get_json(silent=True) or {}
+    result = recipewrite.preview_download(data.get("mixerno"), data.get("recipe_name"),
+                                          monitor.get_saved_driver())
+    return jsonify(result), (200 if result["success"] else 400)
+
+
 @app.route('/download_recipe', methods=['POST'])
 def download_recipe():
     try:
-        data = request.get_json()
-        mixerno = data.get("mixerno")
-        recipe_name = data.get("recipe_name")
-        driver = session.get('plc_driver', '1')
-
-        result = recipewrite.writePlcRecipe(mixerno, recipe_name, int(driver))
-        print(result)
-        if not result.get("success", False):
-            return jsonify(result), 400
-        return jsonify(result), 200
+        data = request.get_json(silent=True) or {}
+        # Driver = the one chosen in Settings (saved in Info_db), not the browser session
+        result = recipewrite.writePlcRecipe(data.get("mixerno"), data.get("recipe_name"),
+                                            monitor.get_saved_driver())
+        return jsonify(result), (200 if result.get("success") else 400)
 
     except Exception as e:
-        print(e)
-        return jsonify({
-            "success": False,
-            "message": str(e)
-        }), 500
+        logging.exception("download_recipe failed")
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route('/api/settings/set_driver', methods=['POST'])
 def set_driver():
-    data = request.get_json()
-    session['plc_driver'] = data.get('driver')
-    return jsonify({"success": True})
+    if session.get('role') not in ('admin', 'superadmin'):
+        return jsonify(success=False, message="Only an admin can change the PLC driver"), 403
+    try:
+        driver = int((request.get_json(silent=True) or {}).get('driver'))
+    except (TypeError, ValueError):
+        driver = None
+    if driver not in monitor.DRIVER_NAMES:
+        return jsonify(success=False, message="Driver must be 1 (Siemens) or 2 (Rockwell)"), 400
+    monitor.save_plc_config(driver=driver)
+    return jsonify(success=True, driver=driver, driver_name=monitor.DRIVER_NAMES[driver])
 
 
 @app.errorhandler(403)

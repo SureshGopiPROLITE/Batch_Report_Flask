@@ -19,6 +19,29 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
+# Windows PowerShell 5.1 turns a native command's redirected stderr into a
+# terminating error when ErrorActionPreference is Stop - probe with Continue.
+function Test-Docker {
+    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    docker info --format '{{.ServerVersion}}' *> $null
+    $ok = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $old
+    return $ok
+}
+
+function Start-DockerIfNeeded {
+    if (Test-Docker) { return }
+    $exe = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
+    if (-not (Test-Path $exe)) { throw 'Docker Desktop is not installed. Install it from https://www.docker.com/products/docker-desktop and run this script again.' }
+    Write-Host '    Docker Desktop is not running - starting it (can take 1-2 minutes)...'
+    Start-Process $exe
+    for ($i = 0; $i -lt 90; $i++) {
+        Start-Sleep -Seconds 2
+        if (Test-Docker) { Write-Host '    Docker is ready.'; return }
+    }
+    throw 'Docker Desktop did not start within 3 minutes. Open it manually, wait until it says "Engine running", then run this script again.'
+}
+
 function New-Secret([int]$bytes = 24) {
     $buf = New-Object byte[] $bytes
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buf)
@@ -39,8 +62,7 @@ function Get-HostMac {
 
 # --- 1. Docker available? -------------------------------------------------------
 Write-Step 'Checking Docker'
-docker info --format '{{.ServerVersion}}' *> $null
-if ($LASTEXITCODE -ne 0) { throw 'Docker is not running. Start Docker Desktop and run this script again.' }
+Start-DockerIfNeeded
 
 # --- 2. .env ----------------------------------------------------------------------
 $envFile = Join-Path $root '.env'
@@ -86,7 +108,9 @@ if ($LASTEXITCODE -ne 0) { throw 'docker compose up failed' }
 Write-Step 'Waiting for the application'
 $healthy = $false
 for ($i = 0; $i -lt 40; $i++) {
+    $ErrorActionPreference = 'Continue'
     $state = docker inspect -f '{{.State.Health.Status}}' batch_report_web 2>$null
+    $ErrorActionPreference = 'Stop'
     if ($state -eq 'healthy') { $healthy = $true; break }
     Start-Sleep -Seconds 3
 }

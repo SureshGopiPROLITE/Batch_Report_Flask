@@ -465,8 +465,8 @@ document.getElementById("configFileInput")?.addEventListener("change", async fun
 
     if (!file) return;
 
-    const server =
-        document.getElementById("driverSelect")?.selectedIndex ?? 0;
+    // 1 = Siemens, 2 = Rockwell (the server checks the file suits the saved driver)
+    const server = document.getElementById("driverSelect")?.value ?? "1";
 
     const formData = new FormData();
 
@@ -628,13 +628,26 @@ window.addEventListener("load", async () => {
     setInterval(refreshStatus, 5000);   // catches auto-connect and dropped link
 });
 
-driverEl?.addEventListener("change", () => {
+// Saved on the server (Info_db): recipe download, tag uploads and auto-connect
+// after a restart all use this driver - 1 = Siemens, 2 = Rockwell.
+driverEl?.addEventListener("change", async () => {
     updatePlaceholder();
-    fetch("/api/settings/set_driver", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ driver: driverEl.value })
-    });
+    try {
+        const r = await fetch("/api/settings/set_driver", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ driver: driverEl.value })
+        });
+        const d = await r.json();
+        if (!d.success) {
+            alert(d.message || "Could not save the PLC driver");
+            const cfg = await (await fetch("/api/settings/get_plc_config")).json();
+            driverEl.value = String(cfg.driver);
+            updatePlaceholder();
+        }
+    } catch (e) {
+        alert("Server error - PLC driver not saved");
+    }
 });
 
 // ---- Connect ----

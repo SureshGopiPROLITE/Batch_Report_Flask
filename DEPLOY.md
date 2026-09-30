@@ -92,6 +92,19 @@ configuration (superadmin login, tag tables, materials).
 After that, the app reconnects to the PLC by itself after outages, and keeps
 trying at startup until the PLC answers.
 
+### Testing with a PLC simulator on the same PC
+A simulator on a loopback address (`127.x.x.x`, for example Logix Emulate or
+Echo on `127.0.0.10`) is **not reachable from Docker**. Inside the container,
+`127.x.x.x` means the container itself. In an **Administrator** PowerShell, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\plc_simulator_bridge.ps1 -SimulatorIp 127.0.0.10
+```
+
+Then set the Station IP in Settings to `host.docker.internal` (Siemens:
+`host.docker.internal,0,1`). Remove the bridge with `-Remove`. A real PLC on
+the network (for example `192.168.0.1`) needs none of this.
+
 ## 4. Licences (vendor)
 
 | Type | Behaviour |

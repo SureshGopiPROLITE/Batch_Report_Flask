@@ -1,5 +1,44 @@
 {% extends 'base.html' %}
 {% block content %}
+<style>
+  /* Step (download order) column */
+  .data-table .step-col { width: 7.5rem; }
+  .data-table .step-cell { white-space: nowrap; }
+  .step-no { display: inline-block; min-width: 1.6rem; font-weight: 600; text-align: center; }
+  .drag-handle { cursor: grab; color: #8a94a3; vertical-align: middle; }
+  .step-btn { border: none; background: transparent; cursor: pointer; padding: 0 .1rem;
+              color: #005da2; font-size: 1.05rem; vertical-align: middle; }
+  .step-btn:hover { color: #003f6e; }
+  .data-table tr[draggable="true"] { cursor: grab; }
+  .data-table tr.dragging { opacity: .45; background: #e8f1f9; }
+  .data-table.order-saved tbody tr[data-index] { transition: background .6s; background: #eaf6ef; }
+
+  /* Download confirmation */
+  .dl-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center;
+                justify-content: center; padding: 16px; background: rgba(15, 30, 45, .45); }
+  .dl-overlay[hidden] { display: none; }
+  .dl-box { width: 100%; max-width: 620px; max-height: 90vh; display: flex; flex-direction: column;
+            background: #fff; border-radius: 10px; padding: 22px 24px; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+  .dl-box h3 { margin: 0 0 4px; color: #005da2; font-size: 1.2rem; }
+  .dl-hint { margin: 0 0 14px; color: #5f6b7a; font-size: .9rem; }
+  .dl-key { display: grid; grid-template-columns: auto 1fr; gap: 10px; margin-bottom: 10px; }
+  .dl-key > div { border: 2px solid #005da2; border-radius: 8px; padding: 8px 14px; }
+  .dl-key span { display: block; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #5f6b7a; }
+  .dl-key strong { font-size: 1.5rem; color: #1f2933; word-break: break-word; }
+  .dl-meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+             font-size: .85rem; color: #5f6b7a; margin-bottom: 8px; }
+  .dl-steps { overflow: auto; border: 1px solid #d5dbe3; border-radius: 6px; min-height: 60px; }
+  .dl-steps table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  .dl-steps th { position: sticky; top: 0; background: #eef2f6; text-align: left; padding: 6px 8px; }
+  .dl-steps td { padding: 5px 8px; border-top: 1px solid #eef2f6; }
+  .dl-error { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: #fdecea; color: #b42318; font-size: .9rem; }
+  .dl-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+  .dl-actions button { border-radius: 6px; padding: 9px 16px; font-size: .95rem; cursor: pointer; }
+  .dl-cancel { background: #fff; color: #005da2; border: 1px solid #005da2; }
+  .dl-ok { background: #005da2; color: #fff; border: none; }
+  .dl-actions button:disabled { opacity: .6; cursor: default; }
+</style>
+
 
 <div class="inv-navbar recipe">
   <div class="inv-navbar-left recipe">
@@ -81,8 +120,38 @@
 
 </div>
 
+<!---------------- DOWNLOAD CONFIRMATION ---------------->
+<div id="dlConfirm" class="dl-overlay" hidden>
+  <div class="dl-box" role="dialog" aria-modal="true" aria-labelledby="dlTitle">
+    <h3 id="dlTitle">Confirm recipe download</h3>
+    <p class="dl-hint">Check the mixer and recipe before writing to the PLC.</p>
+
+    <div class="dl-key">
+      <div><span>Mixer No</span><strong id="dlMixer"></strong></div>
+      <div><span>Recipe</span><strong id="dlRecipe"></strong></div>
+    </div>
+    <div class="dl-meta"><span id="dlPlc"></span><span id="dlCount"></span></div>
+
+    <div class="dl-steps">
+      <table>
+        <thead><tr><th>Order</th><th>Silo</th><th>Material</th><th>Set (kg)</th><th>Fine (kg)</th><th>Tol (kg)</th></tr></thead>
+        <tbody id="dlSteps"></tbody>
+      </table>
+    </div>
+
+    <div id="dlConfirmResult" class="dl-error" hidden></div>
+    <div class="dl-actions">
+      <button type="button" id="dlConfirmCancel" class="dl-cancel">Cancel</button>
+      <button type="button" id="dlConfirmOk" class="dl-ok">Download</button>
+    </div>
+  </div>
+</div>
+
 <script>
-document.getElementById("nextMixer").addEventListener("click", () => {
+// Admins / users may edit recipes and their step order; operators may only download
+const CAN_EDIT_RECIPE = {{ 'true' if user_logged_in and role != 'operator' else 'false' }};
+
+document.getElementById("nextMixer")?.addEventListener("click", () => {
     const mixer = document.getElementById("mixerNo");
     mixer.value = parseInt(mixer.value) + 1;
 });
@@ -433,6 +502,95 @@ async function selectRecipe(recipe) {
 }
 
 
+/* ---------------- STEP ORDER (= PLC download order) ----------------
+   Drag a row, or use the arrows. Every change is saved straight away:
+   step 1 is written to the PLC's first recipe slot, step 2 to the second... */
+function enableStepReorder(table, category) {
+    const tbody = table.querySelector("tbody");
+    const stepRows = () => [...tbody.querySelectorAll("tr[data-index]")];
+    const renumber = () => stepRows().forEach((tr, i) => {
+        const no = tr.querySelector(".step-no");
+        if (no) no.textContent = i + 1;
+    });
+    const orderKey = () => stepRows().map(tr => tr.dataset.index).join(",");
+
+    // Deleting / adding rows changes the numbering too
+    new MutationObserver(renumber).observe(tbody, { childList: true });
+
+    if (!CAN_EDIT_RECIPE) return;
+
+    let savedOrder = orderKey();
+    let dragRow = null;
+
+    async function saveOrder() {
+        renumber();
+        if (orderKey() === savedOrder) return;
+        try {
+            const res = await fetch(`/api/recipes/${encodeURIComponent(category)}/order`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ order: stepRows().map(tr => Number(tr.dataset.index)) })
+            });
+            const d = await res.json();
+            if (!res.ok || !d.success) throw new Error(d.error || "Could not save the step order");
+            savedOrder = orderKey();
+            table.classList.add("order-saved");
+            setTimeout(() => table.classList.remove("order-saved"), 700);
+        } catch (err) {
+            alert(err.message);
+            // Show what is really stored
+            const active = document.querySelector(".file-node.active");
+            selectRecipe({ id: active?.dataset.id, name: category });
+        }
+    }
+
+    tbody.addEventListener("click", (e) => {
+        const btn = e.target.closest(".step-btn");
+        if (!btn) return;
+        e.stopPropagation();
+        const tr = btn.closest("tr");
+        if (tr.classList.contains("editing")) return;
+        const prev = tr.previousElementSibling, next = tr.nextElementSibling;
+        if (btn.classList.contains("step-up") && prev?.dataset.index) tbody.insertBefore(tr, prev);
+        else if (btn.classList.contains("step-down") && next?.dataset.index) tbody.insertBefore(next, tr);
+        else return;
+        saveOrder();
+    });
+
+    tbody.addEventListener("dragstart", (e) => {
+        const tr = e.target.closest("tr[data-index]");
+        if (!tr || tr.classList.contains("editing") || e.target.closest("input, button")) {
+            e.preventDefault();
+            return;
+        }
+        dragRow = tr;
+        tr.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", tr.dataset.index);
+    });
+
+    tbody.addEventListener("dragover", (e) => {
+        if (!dragRow) return;
+        e.preventDefault();
+        const over = e.target.closest("tr[data-index]");
+        if (!over || over === dragRow) return;
+        const box = over.getBoundingClientRect();
+        const after = e.clientY > box.top + box.height / 2;
+        tbody.insertBefore(dragRow, after ? over.nextSibling : over);
+        renumber();
+    });
+
+    tbody.addEventListener("drop", (e) => { if (dragRow) e.preventDefault(); });
+
+    tbody.addEventListener("dragend", () => {
+        if (!dragRow) return;
+        dragRow.classList.remove("dragging");
+        dragRow = null;
+        saveOrder();
+    });
+}
+
+
 /* ---------------- BUILD TABLE ---------------- */
 function buildTable(category, rows) {
 
@@ -444,6 +602,7 @@ function buildTable(category, rows) {
         <thead>
             <tr>
                 <th style="display:none;">Index</th>
+                <th class="step-col" title="Download order - drag rows or use the arrows">Order</th>
                 <th>Silo No</th>
                 <th>Material Name</th>
                 <th>Set Weight(Kg)</th>
@@ -472,15 +631,24 @@ function buildTable(category, rows) {
 
         <tbody id="recipeTableBody">
 
-            ${rows.map(r => `
+            ${rows.map((r, i) => `
 
                 <tr
                     data-index="${r.Index}"
                     data-category="${category}"
+                    ${CAN_EDIT_RECIPE ? 'draggable="true"' : ''}
                 >
 
                     <td style="display:none;">
                         ${r.Index}
+                    </td>
+
+                    <td class="step-cell">
+                        ${CAN_EDIT_RECIPE ? '<i class="bx bx-grid-vertical drag-handle" title="Drag to reorder"></i>' : ''}
+                        <span class="step-no">${i + 1}</span>
+                        ${CAN_EDIT_RECIPE ? `
+                        <button class="step-btn step-up" title="Move up"><i class="bx bx-chevron-up"></i></button>
+                        <button class="step-btn step-down" title="Move down"><i class="bx bx-chevron-down"></i></button>` : ''}
                     </td>
 
                     <td>
@@ -552,11 +720,8 @@ function buildTable(category, rows) {
        ENABLE SORTING
     ===================================================== */
 
-    setTimeout(() => {
-
-        enableRecipeSorting(table);
-
-    }, 10);
+    // Row order = PLC download order, so no column sorting here
+    enableStepReorder(table, category);
 
 
     /* =====================================================
@@ -583,6 +748,7 @@ function buildTable(category, rows) {
     tr.className = "new-row";
 
     tr.innerHTML = `
+      <td class="step-cell"><span class="step-no">+</span></td>
       <td><input class="edit-input silo"></td>
       <td><input class="edit-input material" disabled></td>
       <td><input class="edit-input set"></td>
@@ -596,7 +762,8 @@ function buildTable(category, rows) {
       </td>
     `;
 
-    tbody.prepend(tr);
+    tbody.appendChild(tr);
+    tr.scrollIntoView({ block: "nearest" });
 
     // Keep the new row's Coarse/Fine Speed cells in sync with the setting
     if (!shouldShowCSpeedFSpeed()) {
@@ -680,7 +847,7 @@ document.addEventListener("click", async (e) => {
 
         row.classList.add("editing");
 
-        const tds = row.querySelectorAll("td");
+        const tds = row.querySelectorAll("td:not(.step-cell)");
 
         const silo = tds[1].innerText.trim();
         const mat = tds[2].innerText.trim();
@@ -1436,110 +1603,98 @@ loadColumnSetting()
 
 
 /* =====================================================
-   DOWNLOAD RECIPE
+   DOWNLOAD RECIPE - with confirmation
+   1. Ask the server what will be written (recipe steps in order, mixer,
+      PLC driver + address) - nothing is sent to the PLC yet.
+   2. Operator checks Mixer No and Recipe and confirms.
+   3. Only then /download_recipe writes to the PLC.
 ===================================================== */
-const recipedownload =
-    document.getElementById(
-        "recipedownload"
-    );
+(function () {
+    const btn = document.getElementById("recipedownload");
+    const modal = document.getElementById("dlConfirm");
+    const okBtn = document.getElementById("dlConfirmOk");
+    const cancelBtn = document.getElementById("dlConfirmCancel");
+    const result = document.getElementById("dlConfirmResult");
+    let pending = null;
 
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g,
+        c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-recipedownload.addEventListener(
-    "click",
-    async () => {
-
-        try {
-
-            const mixerno =
-                document.getElementById(
-                    "mixerNo"
-                ).value;
-
-
-            const recipe_name =
-                document.getElementById(
-                    "selectedRecipeLabel"
-                )
-                .textContent
-                .trim();
-
-
-            if (
-                recipe_name === "--" ||
-                !recipe_name
-            ) {
-
-                alert(
-                    "Please select a recipe."
-                );
-
-                return;
-
-            }
-
-
-            const response =
-                await fetch(
-                    "/download_recipe",
-                    {
-                        method: "POST",
-
-                        headers: {
-                            "Content-Type":
-                                "application/json"
-                        },
-
-                        body:
-                            JSON.stringify({
-
-                                mixerno,
-
-                                recipe_name
-
-                            })
-
-                    }
-                );
-
-
-            const data =
-                await response.json();
-
-
-            /* ---------------- CHECK SUCCESS ---------------- */
-
-            if (!data.success) {
-
-                throw new Error(
-                    data.message ||
-                    "Recipe download failed"
-                );
-
-            }
-
-
-            alert(
-                data.message
-            );
-
-
-        } catch (error) {
-
-            console.error(
-                "Error:",
-                error
-            );
-
-
-            alert(
-                error.message
-            );
-
-        }
-
+    function close() {
+        modal.hidden = true;
+        pending = null;
     }
-);
 
+    async function post(url, body) {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+        let data;
+        try { data = await res.json(); } catch { data = {}; }
+        if (!res.ok || !data.success) throw new Error(data.message || `Request failed (${res.status})`);
+        return data;
+    }
+
+    btn.addEventListener("click", async () => {
+        const mixerno = document.getElementById("mixerNo").value.trim();
+        const recipe_name = document.getElementById("selectedRecipeLabel").textContent.trim();
+
+        if (!recipe_name || recipe_name === "--") return alert("Please select a recipe.");
+        if (!/^[1-9]\d*$/.test(mixerno)) return alert("Please enter a valid Mixer No (1, 2, 3 ...).");
+
+        btn.disabled = true;
+        try {
+            const p = await post("/api/recipe_download/preview", { mixerno, recipe_name });
+            pending = { mixerno, recipe_name };
+
+            document.getElementById("dlMixer").textContent = p.mixer;
+            document.getElementById("dlRecipe").textContent = p.recipe;
+            document.getElementById("dlPlc").textContent = `${p.driver_name}  ·  ${p.plc}`;
+            document.getElementById("dlCount").textContent =
+                `${p.steps.length} step${p.steps.length === 1 ? "" : "s"} (PLC has ${p.slots} slots)`;
+            document.getElementById("dlSteps").innerHTML = p.steps.map(s => `
+                <tr><td>${s.step}</td><td>${esc(s.silo)}</td><td>${esc(s.material)}</td>
+                    <td>${esc(s.set_weight)}</td><td>${esc(s.fine_weight)}</td><td>${esc(s.tolerance)}</td></tr>
+            `).join("");
+
+            okBtn.textContent = `Download to Mixer ${p.mixer}`;
+            okBtn.disabled = false;
+            cancelBtn.disabled = false;
+            result.hidden = true;
+            modal.hidden = false;
+            cancelBtn.focus();       // Enter must not download by accident
+        } catch (err) {
+            alert(err.message);
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    okBtn.addEventListener("click", async () => {
+        if (!pending) return;
+        okBtn.disabled = cancelBtn.disabled = true;
+        okBtn.textContent = "Downloading...";
+        result.hidden = true;
+        try {
+            const d = await post("/download_recipe", pending);
+            close();
+            alert(d.message);
+        } catch (err) {
+            result.textContent = err.message;
+            result.hidden = false;
+            okBtn.textContent = "Try again";
+            okBtn.disabled = cancelBtn.disabled = false;
+        }
+    });
+
+    cancelBtn.addEventListener("click", close);
+    modal.addEventListener("click", (e) => { if (e.target === modal && !cancelBtn.disabled) close(); });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !modal.hidden && !cancelBtn.disabled) close();
+    });
+})();
 
 </script>
 {% endblock %}
