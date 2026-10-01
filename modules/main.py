@@ -21,6 +21,18 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+
+def _close(*objs):
+    """Close DB connections, ignoring the ones never opened."""
+    for obj in objs:
+        if obj is None:
+            continue
+        try:
+            obj.close()
+        except Exception:
+            pass
+
+
 def df_split(dfPlcdb):
     try:
         if not dfPlcdb.loc[dfPlcdb['Sample_mode'] == "Trigger"].empty:
@@ -100,6 +112,7 @@ def batch_extras(batch_nos, logged_at=None):
 
 
 def data_process(hours, from_time, to_time):
+    conn = engineConRead = engineConWrite = None
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
@@ -208,7 +221,12 @@ def data_process(hours, from_time, to_time):
             "error": str(e)
         }
 
+    finally:
+        _close(conn, engineConRead, engineConWrite)
+
+
 def plc_data_process(batch_no):
+    conn = engineConRead = engineConWrite = None
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
@@ -323,7 +341,9 @@ def plc_data_process(batch_no):
         print(f" Error in plc_data_process: {e}")
         return pd.DataFrame()
 
-import pandas as pd
+    finally:
+        _close(conn, engineConRead, engineConWrite)
+
 
 
 def add_material_times(df_pivot):
@@ -349,6 +369,7 @@ def add_material_times(df_pivot):
 
 
 def report_data_process(batch_no):
+    conn = engineConRead = engineConWrite = None
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
@@ -503,8 +524,13 @@ def report_data_process(batch_no):
             None,
             pd.DataFrame(),
         )
-    
+
+    finally:
+        _close(conn, engineConRead, engineConWrite)
+
+
 def dashboard_calculations(start_timestamp, end_timestamp, hours):
+    conn = engineConRead = engineConWrite = None
     try:
         
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
@@ -757,3 +783,7 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
     except Exception as e:
         print("Error:", e)
         return {"status": "error", "message": str(e)}
+
+    finally:
+        _close(conn, engineConRead, engineConWrite)
+

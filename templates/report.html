@@ -12,6 +12,17 @@
   .report-search input { border: none; outline: none; flex: 1; min-width: 0; font-size: .9rem; background: transparent; }
   .report-search span { font-size: .78rem; color: #5f6b7a; white-space: nowrap; }
   .batch-detail b { font-size: .92rem; color: #1f2933; font-weight: 600; overflow-wrap: anywhere; }
+
+  /* Multi-select for PDF / Excel of several batches */
+  #reportTable th.sel-col, #reportTable td.sel-col { width: 34px; text-align: center; cursor: default; }
+  #reportTable .sel-col input { width: 16px; height: 16px; cursor: pointer; accent-color: #005da2; }
+  #reportTable tr.selected td { background: #e8f1f9; }
+  .selection-bar { display: flex; align-items: center; gap: 10px; margin: 6px 0; padding: 6px 12px;
+                   background: #e8f1f9; border: 1px solid #b9d3ea; border-radius: 6px; font-size: .9rem; }
+  .selection-bar[hidden] { display: none; }
+  .selection-bar b { color: #005da2; }
+  .selection-bar .inv-button { width: auto; padding: 0 14px; }
+  .selection-bar .link-btn { background: none; border: none; color: #005da2; cursor: pointer; text-decoration: underline; }
 </style>
 
 <!-- =============================== REPORT HEADER =============================== -->
@@ -56,6 +67,14 @@
 </div>
 
 <!-- =============================== REPORT TABLE =============================== -->
+<div id="selectionBar" class="selection-bar" hidden>
+  <span><b id="selCount">0</b> batch(es) selected</span>
+  <button id="selPdf" class="inv-button primary" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Download PDF</button>
+  <button id="selExcel" class="inv-button success" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Download Excel</button>
+  <button id="selClear" class="link-btn">Clear selection</button>
+  <span id="selStatus"></span>
+</div>
+
 <div class="report-table-wrapper">
   <table class="inv-table" id="reportTable">
     <thead><tr><th>Waiting...</th></tr></thead>
@@ -143,6 +162,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function enableSorting(head, body) {
     head.querySelectorAll("th").forEach((th, i) => {
+      if (th.classList.contains("sel-col")) return;
       th.onclick = () => sortTable(body, i);
       th.style.cursor = "pointer";
     });
@@ -186,12 +206,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const cols = orderColumns(Object.keys(data[0]));
-    tableHead.innerHTML = `<tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>`;
+    tableHead.innerHTML = `<tr><th class="sel-col"><input type="checkbox" id="selAll" title="Select all shown rows"></th>${cols.map(c => `<th>${c}</th>`).join("")}</tr>`;
     tableBody.innerHTML = data.map(r =>
       `<tr data-batch="${r.BatchNo}" onclick="openPopup('${r.BatchNo}')">
+        <td class="sel-col"><input type="checkbox" class="row-sel" aria-label="Select batch ${r.BatchNo}"></td>
         ${cols.map(c => `<td>${r[c]}</td>`).join("")}
       </tr>`
     ).join("");
+    updateSelection();
 
     setTimeout(() => enableSorting(tableHead, tableBody), 10);
     applySearch();
@@ -212,7 +234,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const match = words.every(w => text.includes(w));
       tr.style.display = match ? "" : "none";
       if (match) shown++;
+      else {
+        const box = tr.querySelector(".row-sel");
+        if (box) box.checked = false;
+      }
     });
+    updateSelection();
     searchCount.textContent = words.length && rows.length ? `${shown} of ${rows.length}` : "";
   }
 
@@ -333,6 +360,90 @@ document.addEventListener("DOMContentLoaded", () => {
       exportBtn.disabled = false;
     }
   });
+
+
+  /* ================= MULTI-SELECT ================= */
+  // Tick rows (or the header box = all shown rows), then Download PDF / Excel
+  // for all of them at once.
+  const selectionBar = document.getElementById("selectionBar");
+  const selCount = document.getElementById("selCount");
+  const selStatus = document.getElementById("selStatus");
+
+  const visibleRows = () => [...tableBody.querySelectorAll("tr[data-batch]")].filter(tr => tr.style.display !== "none");
+  const selectedBatches = () => [...tableBody.querySelectorAll("tr[data-batch]")]
+    .filter(tr => tr.querySelector(".row-sel")?.checked).map(tr => Number(tr.dataset.batch));
+
+  function updateSelection() {
+    const rows = [...tableBody.querySelectorAll("tr[data-batch]")];
+    rows.forEach(tr => tr.classList.toggle("selected", !!tr.querySelector(".row-sel")?.checked));
+    const n = selectedBatches().length;
+    selCount.textContent = n;
+    selectionBar.hidden = n === 0;
+    const all = document.getElementById("selAll");
+    if (all) {
+      const vis = visibleRows();
+      const ticked = vis.filter(tr => tr.querySelector(".row-sel").checked).length;
+      all.checked = vis.length > 0 && ticked === vis.length;
+      all.indeterminate = ticked > 0 && ticked < vis.length;
+    }
+  }
+
+  // Clicking a checkbox must not open the batch popup
+  tableBody.addEventListener("click", (e) => {
+    if (e.target.closest(".sel-col")) {
+      e.stopPropagation();
+      if (!e.target.matches("input")) {
+        const box = e.target.closest(".sel-col").querySelector("input");
+        box.checked = !box.checked;
+      }
+      updateSelection();
+    }
+  }, true);
+
+  tableHead.addEventListener("change", (e) => {
+    if (e.target.id !== "selAll") return;
+    visibleRows().forEach(tr => tr.querySelector(".row-sel").checked = e.target.checked);
+    updateSelection();
+  });
+
+  document.getElementById("selClear").addEventListener("click", () => {
+    tableBody.querySelectorAll(".row-sel").forEach(b => b.checked = false);
+    updateSelection();
+  });
+
+  async function downloadSelected(type) {
+    const batch_nos = selectedBatches();
+    if (!batch_nos.length) return;
+    const buttons = [document.getElementById("selPdf"), document.getElementById("selExcel")];
+    buttons.forEach(b => b.disabled = true);
+    selStatus.textContent = `Preparing ${type === "pdf" ? "PDF" : "Excel"} for ${batch_nos.length} batch(es)...`;
+    try {
+      const res = await fetch("/api/plc_data/multi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batch_nos, type })
+      });
+      if (!res.ok) {
+        let msg = `Download failed (${res.status})`;
+        try { msg = (await res.json()).error || msg; } catch {}
+        return alert(msg);
+      }
+      const blob = await res.blob();
+      const name = (res.headers.get("Content-Disposition") || "").match(/filename="?([^";]+)"?/);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name ? name[1] : `BatchReports.${type === "pdf" ? "pdf" : "xlsx"}`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      alert("Server error - " + err.message);
+    } finally {
+      buttons.forEach(b => b.disabled = b.hasAttribute("title") && b.title === "Access Denied");
+      selStatus.textContent = "";
+    }
+  }
+  document.getElementById("selPdf").addEventListener("click", () => downloadSelected("pdf"));
+  document.getElementById("selExcel").addEventListener("click", () => downloadSelected("excel"));
 
 
   /* ================= POPUP ================= */

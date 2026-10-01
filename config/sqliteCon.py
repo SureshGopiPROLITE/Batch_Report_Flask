@@ -25,16 +25,29 @@ def get_db_connection():
         return None
 
 # === SQLAlchemy Engine for pandas.to_sql and read_sql ===
-def get_db_connection_engine():
-    try:
+_engine = None
+
+
+def _shared_engine():
+    """ONE engine (and connection pool) for the whole process. A new engine per
+    call - as before - left a pool behind every time; reports over many batches
+    ran Postgres out of connections ("too many clients")."""
+    global _engine
+    if _engine is None:
         db_url = (
             f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}@"
             f"{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
         )
-        engine = create_engine(db_url)
+        _engine = create_engine(db_url, pool_size=10, max_overflow=20, pool_timeout=30,
+                                pool_pre_ping=True, pool_recycle=1800)
+    return _engine
+
+
+def get_db_connection_engine():
+    try:
+        engine = _shared_engine()
         engineConRead = engine.connect()
         engineConWrite = engine.connect()
-        print(" Postgres SQLAlchemy engine created successfully.")
         return engine, engineConRead, engineConWrite
     except Exception as e:
         print(f" Failed to create SQLAlchemy engine: {e}")

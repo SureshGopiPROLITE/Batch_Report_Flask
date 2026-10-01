@@ -896,6 +896,80 @@ REPORT_EXPORT_COLUMNS = ["BatchNo", "TimeStamp", "Shift", "Plant Name", "Recipe 
                          "Total Set Weight(Kg)", "Total Actual Weight(Kg)"]
 
 
+MULTI_REPORT_LIMIT = {"pdf": 100, "excel": 500}
+
+
+@app.route('/api/plc_data/multi', methods=['POST'])
+def api_plc_data_multi():
+    """Batch reports for the rows ticked in the report table.
+    body: {"batch_nos": [...], "type": "pdf" | "excel"}
+    pdf   -> one PDF, each batch report on its own page
+    excel -> one workbook: Summary sheet + one sheet per batch"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        kind = payload.get("type")
+        if kind not in MULTI_REPORT_LIMIT:
+            return jsonify({"success": False, "error": "type must be pdf or excel"}), 400
+        try:
+            batch_nos = sorted({int(b) for b in payload.get("batch_nos") or []})
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "batch_nos must be numbers"}), 400
+        if not batch_nos:
+            return jsonify({"success": False, "error": "Select at least one batch"}), 400
+        limit = MULTI_REPORT_LIMIT[kind]
+        if len(batch_nos) > limit:
+            return jsonify({"success": False,
+                            "error": f"{len(batch_nos)} batches selected - {kind.upper()} export allows up to {limit} at a time"}), 400
+
+        batches, summary = [], []
+        for no in batch_nos:
+            df_pivot, df_string, daily_batch_no, df_cal_sum = main.report_data_process(no)
+            if not isinstance(df_pivot, pd.DataFrame) or df_pivot.empty:
+                continue
+            batches.append((no, df_pivot, df_string, df_cal_sum))
+            info = dict(zip(df_string["Name"], df_string["Value"])) if not df_string.empty else {}
+            cal = dict(zip(df_cal_sum["Name"], df_cal_sum["Value"])) if not df_cal_sum.empty else {}
+            set_total = pd.to_numeric(pd.Series([cal.get("TotalBatchSetWeight")]), errors="coerce").iloc[0]
+            act_total = pd.to_numeric(pd.Series([cal.get("TotalBatchActualWeight")]), errors="coerce").iloc[0]
+            if pd.isna(set_total):
+                set_total = pd.to_numeric(df_pivot.get("SetWeight"), errors="coerce").sum()
+            if pd.isna(act_total):
+                act_total = pd.to_numeric(df_pivot.get("ActualWeight"), errors="coerce").sum()
+            summary.append({
+                "BatchNo": no, "Daily Batch No": daily_batch_no, "Shift": info.get("Shift", ""),
+                "Plant Name": info.get("Plant Name", ""), "Recipe Name": info.get("Recipe Name", ""),
+                "Mixer No": info.get("Mixer Selected", ""),
+                "Start Date Time": info.get("Start Date Time", ""), "End Date Time": info.get("End Date Time", ""),
+                "Silos Used": len(df_pivot),
+                "Total Set Weight(Kg)": round(float(set_total), 2),
+                "Total Actual Weight(Kg)": round(float(act_total), 2),
+            })
+        if not batches:
+            return jsonify({"success": False, "error": "No PLC data found for the selected batches"}), 404
+
+        show_speed = get_column_settings()
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if kind == "pdf":
+            data = Report.generate_multi_pdf_report(batches, include_speed=show_speed)
+            return send_file(io.BytesIO(data), as_attachment=True, mimetype="application/pdf",
+                             download_name=f"BatchReports_{len(batches)}_{stamp}.pdf")
+
+        summary_df = pd.DataFrame(summary)
+        totals = {c: "" for c in summary_df.columns}
+        totals["BatchNo"] = f"Total ({len(summary_df)})"
+        for c in ("Total Set Weight(Kg)", "Total Actual Weight(Kg)"):
+            totals[c] = round(summary_df[c].sum(), 2)
+        summary_df = pd.concat([summary_df, pd.DataFrame([totals])], ignore_index=True)
+        data = Report.generate_multi_excel_report(batches, summary_df, include_speed=show_speed)
+        return send_file(io.BytesIO(data), as_attachment=True,
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                         download_name=f"BatchReports_{len(batches)}_{stamp}.xlsx")
+
+    except Exception as e:
+        logging.exception("Multi batch report failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/export_data', methods=['POST'])
 def api_export_data():
     """Excel of the report rows. With "batch_nos" (the rows left after the

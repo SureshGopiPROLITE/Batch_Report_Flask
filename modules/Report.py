@@ -32,10 +32,94 @@ def difference(set_wg, act_wg):
     return round(act_wg - set_wg, 2)
 
 
+_logo_cache = {}
+LOGO_MAX_HEIGHT = 300   # px - plenty for the report header, at print resolution
+
+
 def encode_logo(logo_path):
-    """Converts logo to Base64 string for embedding."""
+    """Logo as Base64 PNG for embedding, scaled down to print size.
+
+    The uploaded logo can be huge (12500 x 3125 px, 2.6 MB); decoding that for
+    every report page made PDFs slow and large. Cached until the file changes."""
+    try:
+        stamp = os.path.getmtime(logo_path)
+    except OSError:
+        stamp = None
+    cached = _logo_cache.get(logo_path)
+    if cached and cached[0] == stamp:
+        return cached[1]
+
     with open(logo_path, "rb") as logo_file:
-        return base64.b64encode(logo_file.read()).decode("utf-8")
+        raw = logo_file.read()
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(raw))
+        if img.height > LOGO_MAX_HEIGHT:
+            img = img.resize((max(1, round(img.width * LOGO_MAX_HEIGHT / img.height)), LOGO_MAX_HEIGHT),
+                             Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG", optimize=True)
+            raw = buf.getvalue()
+    except Exception:
+        pass   # unreadable by Pillow - embed the original file
+    encoded = base64.b64encode(raw).decode("utf-8")
+    _logo_cache[logo_path] = (stamp, encoded)
+    return encoded
+
+
+# ==========================================================
+# 🔹 PDF Report Generator
+# ==========================================================
+
+PDF_PAGE_CSS = """
+    @page {
+        size: A4;
+        margin: 6mm;
+    }
+
+    body {
+        transform: scale(0.86);
+        transform-origin: top center;
+    }
+"""
+
+
+def _report_details(df_string, df_cal_sum, batch_no):
+    """Header values of one batch (Info + Summary rows)."""
+    def get_value(k):
+        hit = df_string.loc[df_string["Name"] == k, "Value"] if not df_string.empty else []
+        return hit.iloc[0] if len(hit) else "N/A"
+
+    def get_cal_value(k):
+        hit = df_cal_sum.loc[df_cal_sum["Name"] == k, "Value"] if not df_cal_sum.empty else []
+        return hit.iloc[0] if len(hit) else "N/A"
+
+    return {
+        "printed_date": datetime.now().strftime("%d-%m-%Y %H:%M"),
+        "plant_name": get_value("Plant Name"),
+        "recipe_name": get_value("Recipe Name"),
+        "start_time": get_value("Start Date Time"),
+        "end_time": get_value("End Date Time"),
+        "shift": get_value("Shift"),
+        "mixer_no": get_value("Mixer Selected"),
+        "batch_no": batch_no,
+        "time_taken": get_cal_value("BatchTimeMinutes"),
+        "total_set_weight": get_cal_value("TotalBatchSetWeight"),
+        "total_actual_weight": get_cal_value("TotalBatchActualWeight"),
+    }
+
+
+def _render_pdf(df_pivot, df_string, batch_no, df_cal_sum, include_speed=True, logo_base64=None):
+    """One batch report, rendered (WeasyPrint document - pages can be merged)."""
+    if logo_base64 is None:
+        logo_base64 = encode_logo("data_files/logo.png")
+    html = generate_html_report(
+        df_pivot,
+        logo_base64,
+        _report_details(df_string, df_cal_sum, batch_no),
+        include_speed=include_speed
+    )
+    return HTML(string=html).render(stylesheets=[CSS(string=PDF_PAGE_CSS)])
 
 
 # ==========================================================
@@ -49,129 +133,25 @@ def generate_pdf_report(
     df_cal_sum,
     include_speed=True
 ):
-    # Load logo
+    return _render_pdf(df_pivot, df_string, batch_no, df_cal_sum, include_speed).write_pdf()
+
+
+def generate_multi_pdf_report(batches, include_speed=True):
+    """batches: [(batch_no, df_pivot, df_string, df_cal_sum), ...] ->
+    one PDF, every batch report starting on its own page."""
     logo_base64 = encode_logo("data_files/logo.png")
-
-    get_value = lambda k: (
-        df_string.loc[
-            df_string["Name"] == k,
-            "Value"
-        ].iloc[0]
-        if not df_string[
-            df_string["Name"] == k
-        ].empty
-        else "N/A"
-    )
-
-    get_cal_value = lambda k: (
-        df_cal_sum.loc[
-            df_cal_sum["Name"] == k,
-            "Value"
-        ].iloc[0]
-        if not df_cal_sum[
-            df_cal_sum["Name"] == k
-        ].empty
-        else "N/A"
-    )
-
-    details = {
-        "printed_date": datetime.now().strftime("%d-%m-%Y %H:%M"),
-        "plant_name": get_value("Plant Name"),
-        "recipe_name": get_value("Recipe Name"),
-        "start_time": get_value("Start Date Time"),
-        "end_time": get_value("End Date Time"),
-        "shift": get_value("Shift"),
-        "batch_no": batch_no,
-        "time_taken": get_cal_value("BatchTimeMinutes"),
-        "total_set_weight": get_cal_value("TotalBatchSetWeight"),
-        "total_actual_weight": get_cal_value("TotalBatchActualWeight"),
-    }
-
-    # Generate HTML
-    html = generate_html_report(
-        df_pivot,
-        logo_base64,
-        details,
-        include_speed=include_speed
-    )
-
-    # ======================================================
-    # 🔹 Generate PDF
-    # ======================================================
-
-    pdf_bytes = HTML(string=html).write_pdf(
-        stylesheets=[
-            CSS(
-                string="""
-                    @page {
-                        size: A4;
-                        margin: 6mm;
-                    }
-
-                    body {
-                        transform: scale(0.86);
-                        transform-origin: top center;
-                    }
-                """
-            )
-        ]
-    )
-
-    return pdf_bytes
+    docs = [_render_pdf(pivot, string, no, cal, include_speed, logo_base64)
+            for no, pivot, string, cal in batches]
+    pages = [page for doc in docs for page in doc.pages]
+    return docs[0].copy(pages).write_pdf()
 
 
 # ==========================================================
 # 🔹 Excel Report Generator
 # ==========================================================
 
-def generate_excel_report(
-    df_pivot,
-    df_string,
-    batch_no,
-    df_cal_sum,
-    include_speed=True
-):
-    get_value = lambda k: (
-        df_string.loc[
-            df_string["Name"] == k,
-            "Value"
-        ].iloc[0]
-        if not df_string[
-            df_string["Name"] == k
-        ].empty
-        else "N/A"
-    )
-
-    get_cal_value = lambda k: (
-        df_cal_sum.loc[
-            df_cal_sum["Name"] == k,
-            "Value"
-        ].iloc[0]
-        if not df_cal_sum[
-            df_cal_sum["Name"] == k
-        ].empty
-        else "N/A"
-    )
-
-    details = {
-        "printed_date": datetime.now().strftime("%d-%m-%Y %H:%M"),
-        "plant_name": get_value("Plant Name"),
-        "recipe_name": get_value("Recipe Name"),
-        "start_time": get_value("Start Date Time"),
-        "end_time": get_value("End Date Time"),
-        "shift": get_value("Shift"),
-        "batch_no": batch_no,
-        "time_taken": get_cal_value("BatchTimeMinutes"),
-        "total_set_weight": get_cal_value("TotalBatchSetWeight"),
-        "total_actual_weight": get_cal_value("TotalBatchActualWeight"),
-    }
-
-    output = io.BytesIO()
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Batch Report"
-
+def _fill_excel_sheet(ws, df_pivot, details, include_speed=True):
+    """Writes one batch report onto worksheet ws."""
     # ======================================================
     # 🔹 Report Title
     # ======================================================
@@ -300,9 +280,47 @@ def generate_excel_report(
         ]
         ws.append(row_data)
 
-    # ======================================================
-    # 🔹 Save Excel File
-    # ======================================================
+
+
+def generate_excel_report(
+    df_pivot,
+    df_string,
+    batch_no,
+    df_cal_sum,
+    include_speed=True
+):
+    output = io.BytesIO()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Batch Report"
+    _fill_excel_sheet(ws, df_pivot, _report_details(df_string, df_cal_sum, batch_no), include_speed)
+    wb.save(output)
+    output.seek(0)
+    return output.read()
+
+
+def generate_multi_excel_report(batches, summary=None, include_speed=True):
+    """One workbook: a "Summary" sheet (one row per batch) and one sheet per
+    batch with the same layout as the single batch report."""
+    output = io.BytesIO()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    if summary is not None and not summary.empty:
+        ws.append(list(summary.columns))
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill(start_color="DDDDDD", fill_type="solid")
+        for row in summary.itertuples(index=False):
+            ws.append(list(row))
+        for i, col in enumerate(summary.columns, start=1):
+            width = max([len(str(col))] + [len(str(v)) for v in summary.iloc[:, i - 1].head(300)]) + 2
+            ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = min(width, 40)
+        ws.freeze_panes = "A2"
+
+    for no, pivot, string, cal in batches:
+        sheet = wb.create_sheet(title=f"Batch {no}"[:31])
+        _fill_excel_sheet(sheet, pivot, _report_details(string, cal, no), include_speed)
 
     wb.save(output)
     output.seek(0)
