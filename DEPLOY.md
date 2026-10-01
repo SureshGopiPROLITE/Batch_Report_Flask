@@ -187,7 +187,35 @@ cannot be saved, the log says `NOT saved - trigger left set`, and the app retrie
 it every 5 seconds. If the licence stops being valid, the log says
 `Licence no longer valid ... PLC logging stopped`.
 
-## 8. Never do this
+## 8. Protecting the code on the client PC
+
+The image is built so the client cannot read or change the application:
+
+| Protection | Effect |
+|---|---|
+| Python compiled with Cython at build time | The image has **no `.py` source**, only `*.cpython-312-…so` binary modules. Docker Desktop → Files shows them, but they are not readable code. |
+| Read-only container (`read_only: true`) | Nothing in the container can be changed, not even as root: Docker Desktop's *Open file editor*, `docker cp` and `docker exec` edits are all refused. Only the data volumes (logs, backups, logo) and `/tmp` are writable. |
+| Non-root, no capabilities | The app runs as `appuser`, with `no-new-privileges` and all Linux capabilities dropped. |
+| No vendor files in the image | `tools\` (licence generator), `deploy\` and the build script are not included. |
+
+HTML templates and the browser JavaScript/CSS can still be read; every browser
+receives them anyway. Nothing secret belongs in them.
+
+**What remains possible for a Windows administrator on that PC:**
+- **Copying the binary files:** they can't be turned back into the original source, but they are not encrypted.
+- **Stopping or deleting the containers.**
+
+Limit who can do that:
+- **Separate accounts:** give operators a standard Windows account, used only for
+  the browser, and keep the administrator account for Prolite. Docker Desktop
+  needs its user in the `docker-users` group. The auto-login account that runs
+  SKEW must be in it, so don't give that account's password to operators for
+  general use.
+- **Hide Docker Desktop:** close its window after starting (it keeps running in the
+  tray), and turn off *Settings → General → Open Docker Dashboard when Docker
+  Desktop starts*.
+
+## 9. Never do this
 
 - **`docker compose down -v`**: `-v` deletes the volumes, meaning all production
   data. Plain `docker compose down` is safe.

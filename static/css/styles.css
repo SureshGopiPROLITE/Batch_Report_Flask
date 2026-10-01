@@ -2039,6 +2039,36 @@ button:hover{
     background-color: red;
 }
 
+/* PLC not connected: the dot blinks so it is noticed from across the room */
+.status-dot.checking { background-color: #9aa5b1; }
+.status-dot.reconnecting { background-color: #f59e0b; }
+.status-dot.disconnected,
+.status-dot.reconnecting {
+    animation: plc-blink 1s ease-in-out infinite;
+}
+.status-dot.disconnected { box-shadow: 0 0 0 0 rgba(220, 38, 38, .6); }
+
+@keyframes plc-blink {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: .2; transform: scale(.8); }
+}
+
+.nav-plc-status[data-state="disconnected"] {
+    border-color: #f5b5b5;
+    background: #fdecea;
+    color: #b42318;
+}
+.nav-plc-status[data-state="reconnecting"] {
+    border-color: #f6d39a;
+    background: #fff4e0;
+    color: #8a5300;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .status-dot.disconnected,
+    .status-dot.reconnecting { animation: none; }
+}
+
 
 /* ===========================
    ACTIONS

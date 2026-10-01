@@ -1,3 +1,20 @@
+# ---------------------------------------------------------------------------
+# Stage 1: compile the application to native modules (no .py source shipped)
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir "cython>=3.0,<4" setuptools
+
+WORKDIR /src
+COPY . .
+RUN python docker/compile_app.py /src \
+    && rm -rf docker tools deploy init_db.py schema.sql README.md requirements.txt Dockerfile .env.example
+
+# ---------------------------------------------------------------------------
+# Stage 2: runtime image
+# ---------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm
 
 # Runtime libraries only: WeasyPrint (PDF reports) needs Pango/HarfBuzz and
@@ -29,9 +46,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY . .
+# Compiled application only. Owned by root and not writable by the app user;
+# docker-compose also mounts the container file system read-only.
+COPY --from=builder /src/ /app/
+RUN chmod -R a-w,u+w /app
 
-# Non-root user; it owns only the folders the app writes to.
+# Non-root user; it owns only the folders the app writes to (volumes).
 RUN useradd --system --uid 1000 --home-dir /app appuser \
     && mkdir -p /app/logs /app/Backups /app/data_files \
     && chown -R appuser:appuser /app/logs /app/Backups /app/data_files

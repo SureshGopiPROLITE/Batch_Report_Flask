@@ -30,6 +30,15 @@ services:
       - app_logs:/app/logs
       - app_backups:/app/Backups
       - app_data_files:/app/data_files   # uploaded company logo
+    # Code cannot be changed inside the container (Docker Desktop "Files" /
+    # "Open file editor", docker cp, exec): only the volumes above and /tmp
+    # are writable.
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
     depends_on:
       postgres:
         condition: service_healthy

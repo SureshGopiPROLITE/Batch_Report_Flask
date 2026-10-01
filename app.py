@@ -244,14 +244,9 @@ def add_recipe():
             (name, name)
         )
         conn.commit()
-
-        cursorWrite.execute("""
-            INSERT INTO "recipeData"
-                ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "Category", "CoarseSpeed", "FineSpeed")
-            VALUES ('', '', '', '', '', %s, '', '')
-        """, (name,))
-        conn.commit()
-
+        # No placeholder row: '' is not a valid number in Postgres (the insert
+        # failed after the recipe was created). The page shows an empty table
+        # with the Add button instead.
         return jsonify({"success": True})
 
     except Exception as e:
@@ -672,23 +667,10 @@ def update_row(index):
 def delete_row(index):
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
-    # STEP 1: Delete selected row
+    # "Index" is a stable row id (database sequence). It used to be renumbered
+    # 1..N for every recipe here, which changed the ids of rows other open
+    # pages were still showing; the step order lives in "Seq" instead.
     cursorWrite.execute('DELETE FROM "recipeData" WHERE "Index"=%s', (index,))
-    conn.commit()
-
-    # STEP 2: Read all remaining rows ordered by old Index
-    cursorRead.execute('SELECT ctid FROM "recipeData" ORDER BY "Index" ASC')
-    rows = cursorRead.fetchall()
-
-    # STEP 3: Reset index from 1...N
-    new_index = 1
-    for row in rows:
-        cursorWrite.execute(
-            'UPDATE "recipeData" SET "Index"=%s WHERE ctid=%s',
-            (new_index, row[0])
-        )
-        new_index += 1
-
     conn.commit()
     conn.close()
 

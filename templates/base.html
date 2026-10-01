@@ -24,8 +24,8 @@
 
         <div class="navbar-right">
             {% if user %}
-                <div class="nav-plc-status" title="PLC connection status">
-                    <span id="navStatusDot" class="status-dot disconnected"></span>
+                <div class="nav-plc-status" id="navPlcStatus" title="PLC connection status">
+                    <span id="navStatusDot" class="status-dot checking"></span>
                     <span id="navStatusText">PLC: Checking…</span>
                 </div>
 
@@ -308,8 +308,12 @@
     function updateNavPlcStatus(isConnected, reconnecting = false) {
         const dot = document.getElementById("navStatusDot");
         const text = document.getElementById("navStatusText");
+        const pill = document.getElementById("navPlcStatus");
         if (!dot || !text) return;
-        dot.className = "status-dot " + (isConnected ? "connected" : "disconnected");
+        // Not connected = blinking (red; amber while the monitor is reconnecting)
+        const state = isConnected ? "connected" : reconnecting ? "reconnecting" : "disconnected";
+        dot.className = "status-dot " + state;
+        if (pill) pill.dataset.state = state;
         text.textContent = "PLC: " + (isConnected ? "Connected"
                          : reconnecting ? "Reconnecting…" : "Disconnected");
     }

@@ -73,6 +73,21 @@ def ensure_indexes():
         'CREATE INDEX IF NOT EXISTS ix_plc_data_batchno ON plc_data ("BatchNo")',
         'CREATE INDEX IF NOT EXISTS ix_batches_timestamp ON "Batches" ("TimeStamp")',
         'ALTER TABLE "recipeData" ADD COLUMN IF NOT EXISTS "Seq" integer',
+        # "Index" is the row id that edit / delete / reorder / download use.
+        # It never had a default, so every row added through the app got NULL
+        # and all of a recipe's rows looked like one. Give it a sequence and
+        # fill in the missing ones (existing ids are kept).
+        'CREATE SEQUENCE IF NOT EXISTS "recipeData_Index_seq"',
+        """SELECT setval('"recipeData_Index_seq"',
+                         GREATEST((SELECT COALESCE(MAX("Index"), 0) FROM "recipeData"), 1))""",
+        """UPDATE "recipeData" SET "Index" = nextval('"recipeData_Index_seq"')
+           WHERE "Index" IS NULL""",
+        """UPDATE "recipeData" r SET "Index" = nextval('"recipeData_Index_seq"')
+           FROM (SELECT ctid, ROW_NUMBER() OVER (PARTITION BY "Index" ORDER BY ctid) AS n
+                 FROM "recipeData") d
+           WHERE r.ctid = d.ctid AND d.n > 1""",
+        """ALTER TABLE "recipeData" ALTER COLUMN "Index"
+           SET DEFAULT nextval('"recipeData_Index_seq"')""",
     ]
     conn = connect()
     try:

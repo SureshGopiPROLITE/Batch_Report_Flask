@@ -476,19 +476,7 @@ async function selectRecipe(recipe) {
         await res.json();
 
 
-    if (!rows.length) {
-
-        tableContainer.innerHTML =
-            `<p class="placeholder">
-                No data found for
-                <b>${recipe.name}</b>.
-             </p>`;
-
-        return;
-
-    }
-
-
+    // An empty recipe still gets its (empty) table, so "Add" has somewhere to add rows
     tableContainer.innerHTML = "";
 
 

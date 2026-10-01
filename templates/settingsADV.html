@@ -599,7 +599,7 @@ function updateStatus(isConnected, reconnecting = false) {
     const text = document.getElementById("statusText");
     if (!dot || !text) return;
     dot.style.display = "inline-block";
-    dot.className = "status-dot " + (isConnected ? "connected" : "disconnected");
+    dot.className = "status-dot " + (isConnected ? "connected" : reconnecting ? "reconnecting" : "disconnected");
     text.textContent = isConnected ? "Connected"
                      : reconnecting ? "Reconnecting…" : "Disconnected";
 }

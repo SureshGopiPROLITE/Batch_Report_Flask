@@ -37,3 +37,8 @@ deploy/
 
 # Built client packages
 release/
+
+# Unused, unfinished PLC drivers (not imported; pymodbus/opcua not installed)
+plc_connection/Modbus.py
+plc_connection/OPCUA.py
+chrome-profile/
