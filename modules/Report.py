@@ -177,6 +177,7 @@ def _fill_excel_sheet(ws, df_pivot, details, include_speed=True):
         ("Plant Name",details["plant_name"]),
         ("Recipe Name",details["recipe_name"]),
         ("Batch No",details["batch_no"]),
+        ("Mixer No",details["mixer_no"]),
         ("Start Time",details["start_time"]),
         ("End Time",details["end_time"]),
         ("Shift",details["shift"]),
@@ -497,6 +498,14 @@ def generate_html_report(
 
                         <td><b>Shift:</b></td>
                         <td>{details['shift']}</td>
+                    </tr>
+
+                    <tr>
+                        <td><b>Mixer No:</b></td>
+                        <td>{details['mixer_no']}</td>
+
+                        <td><b>Plant Name:</b></td>
+                        <td>{details['plant_name']}</td>
                     </tr>
                 </table>
             </div>

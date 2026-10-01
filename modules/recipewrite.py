@@ -112,6 +112,9 @@ def _plain(value):
     return value
 
 
+MIXER_MIN, MIXER_MAX = 1, 6   # mixers available at the plant
+
+
 def prepare_download(mixerno, recipe_name, driver):
     """Everything to be written, as DataFrames + a summary. Raises DownloadError."""
     driver = int(driver)
@@ -123,8 +126,8 @@ def prepare_download(mixerno, recipe_name, driver):
         mixerno = int(mixerno)
     except (TypeError, ValueError):
         raise DownloadError("Mixer No must be a whole number")
-    if mixerno < 1:
-        raise DownloadError("Mixer No must be 1 or more")
+    if not MIXER_MIN <= mixerno <= MIXER_MAX:
+        raise DownloadError(f"Mixer No must be from {MIXER_MIN} to {MIXER_MAX}")
 
     engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
     if engineConRead is None:
