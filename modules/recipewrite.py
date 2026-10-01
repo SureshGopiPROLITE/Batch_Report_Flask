@@ -32,12 +32,13 @@ TAG_COLUMNS = {
 RECIPE_STEPS_SQL = text(
     'SELECT r."Index", r."Seq", r."Category", r."SiloNo", '
     'COALESCE(m."MaterialName", r."MaterialName") AS "MaterialName", '
-    'r."SetWeight", r."FineWeight", r."Tolerance", r."CoarseSpeed", r."FineSpeed" '
+    'r."SetWeight", r."FineWeight", r."Tolerance", COALESCE(r."InflightWeight", 0) AS "InflightWeight", '
+    'r."CoarseSpeed", r."FineSpeed" '
     'FROM "recipeData" r LEFT JOIN "MaterialData" m ON r."SiloNo" = m."SiloNo" '
     'WHERE r."Category" = :category AND r."SiloNo" IS NOT NULL '
     'ORDER BY r."Seq" NULLS LAST, r."Index"')
 
-WEIGHT_COLUMNS = ["SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed"]
+WEIGHT_COLUMNS = ["SetWeight", "FineWeight", "Tolerance", "InflightWeight", "CoarseSpeed", "FineSpeed"]
 
 
 class DownloadError(ValueError):
@@ -59,24 +60,44 @@ def load_recipe_steps(engineConRead, recipe_name):
 
 
 def map_steps_to_slots(dfTags, dfRecipe):
-    """Step 1 -> Recipe_Data[1] tags, step 2 -> Recipe_Data[2], ... The silo
-    number of each step goes into that slot's SiloNo tag. Unused slots get
-    SiloNo 0, weights 0 and MaterialName "." so the PLC skips them."""
-    tags = dfTags.rename(columns={"SiloNo": "Slot"}).astype({"Slot": "int"})
-    slots = int(tags["Slot"].max())
-    if len(dfRecipe) > slots:
-        raise DownloadError(f"Recipe has {len(dfRecipe)} steps but the PLC has only {slots} recipe slots")
+    """Each silo's values go to that silo's own tags: a recipe row for silo 3
+    -> Recipe_Data[3].SiloNo / .SetWeight / .InflightWeight / ... and its
+    position in the recipe (Order column on screen) -> Recipe_Data[3].Order.
 
-    steps = dfRecipe.rename(columns={"Step": "Slot"})
-    steps = steps.drop(columns=[c for c in ("Index", "Category", "Seq") if c in steps.columns])
+    The PLC uses the Order tag for the dosing sequence. Silos not in the recipe
+    get Order 0, SiloNo 0, weights 0 and MaterialName "." so the PLC skips them.
+    Only tags listed in the recipe tag table are written (no Order /
+    InflightWeight tag there -> that value is simply not sent)."""
+    tags = dfTags.rename(columns={"SiloNo": "Slot"}).astype({"Slot": "int"})
+    available = set(tags["Slot"])
+
+    silos = pd.to_numeric(dfRecipe["SiloNo"], errors="coerce").astype("Int64")
+    twice = sorted(int(x) for x in silos[silos.duplicated()].dropna().unique())
+    if twice:
+        raise DownloadError(f"Silo {', '.join(map(str, twice))} is used more than once in this recipe - "
+                            "each silo has one PLC address, so combine those rows")
+    missing = sorted(int(x) for x in silos.dropna() if int(x) not in available)
+    if missing:
+        raise DownloadError(f"No PLC address for silo {', '.join(map(str, missing))} in the recipe tag table "
+                            f"(it has Recipe_Data[{min(available)}..{max(available)}])")
+
+    steps = dfRecipe.assign(Slot=silos.astype(int), Order=dfRecipe["Step"])
+    steps = steps.drop(columns=[c for c in ("Index", "Category", "Seq", "Step") if c in steps.columns])
     merged = tags.merge(steps, on="Slot", how="left")
 
     merged["SiloNo"] = pd.to_numeric(merged["SiloNo"], errors="coerce").fillna(0).astype(int)
+    merged["Order"] = pd.to_numeric(merged["Order"], errors="coerce").fillna(0).astype(int)
     merged["MaterialName"] = merged["MaterialName"].fillna(".")
     for col in WEIGHT_COLUMNS:
         if col not in merged.columns:
             merged[col] = 0
     merged[WEIGHT_COLUMNS] = merged[WEIGHT_COLUMNS].fillna(0)
+
+    known = set(merged.columns)
+    unknown = sorted(set(merged["Name"]) - known)
+    if unknown:
+        raise DownloadError(f"Recipe tag table has tag name(s) the recipe has no value for: {unknown}. "
+                            f"Use: SiloNo, MaterialName, Order, {', '.join(WEIGHT_COLUMNS)}")
     merged["Value"] = merged.apply(lambda row: row[row["Name"]], axis=1)
     return merged
 
@@ -161,16 +182,20 @@ def prepare_download(mixerno, recipe_name, driver):
     node = str(node).strip()
     ip, rack, slot = monitor.parse_node(driver, node)    # DownloadError-worthy ValueError
 
+    tag_names = set(dfSlots["Name"])
     steps = [
         {"step": int(r.Step), "silo": _plain(r.SiloNo), "material": r.MaterialName,
          "set_weight": _plain(r.SetWeight), "fine_weight": _plain(r.FineWeight),
-         "tolerance": _plain(r.Tolerance)}
+         "tolerance": _plain(r.Tolerance), "inflight": _plain(r.InflightWeight),
+         "address": f"Recipe_Data[{_plain(r.SiloNo)}]"}
         for r in dfRecipe.itertuples()
     ]
     summary = {
         "recipe": recipe_name, "mixer": mixerno, "plant": plant,
         "driver": driver, "driver_name": monitor.DRIVER_NAMES[driver], "plc": node,
         "steps": steps, "slots": int(dfSlots["SiloNo"].astype(int).max()),
+        # tags the PLC table lacks, so the popup can say they are not sent
+        "not_sent": [t for t in ("Order", "InflightWeight") if t not in tag_names],
     }
     return {
         "summary": summary, "driver": driver, "ip": ip, "rack": rack, "slot": slot,
@@ -214,7 +239,7 @@ def _write_siemens(p):
             db, start, bit = _s7_address(row)
             return snap7_plc.writeinSnap7(plc, db, start, bit, row["data_type"], _plain(row["Value"]))
 
-        # Slots in step order: Recipe_Data[1] (step 1) first
+        # Address order; the dosing sequence travels in the Order tags
         tags = p["dfRecipeTags"].sort_values("Slot", kind="stable")
         tags["Status"] = tags.apply(write, axis=1)
         header = p["dfHeader"]

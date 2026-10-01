@@ -17,7 +17,7 @@
   .dl-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center;
                 justify-content: center; padding: 16px; background: rgba(15, 30, 45, .45); }
   .dl-overlay[hidden] { display: none; }
-  .dl-box { width: 100%; max-width: 620px; max-height: 90vh; display: flex; flex-direction: column;
+  .dl-box { width: 100%; max-width: 760px; max-height: 90vh; display: flex; flex-direction: column;
             background: #fff; border-radius: 10px; padding: 22px 24px; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
   .dl-box h3 { margin: 0 0 4px; color: #005da2; font-size: 1.2rem; }
   .dl-hint { margin: 0 0 14px; color: #5f6b7a; font-size: .9rem; }
@@ -31,6 +31,7 @@
   .dl-steps table { width: 100%; border-collapse: collapse; font-size: .88rem; }
   .dl-steps th { position: sticky; top: 0; background: #eef2f6; text-align: left; padding: 6px 8px; }
   .dl-steps td { padding: 5px 8px; border-top: 1px solid #eef2f6; }
+  .dl-steps td.dl-addr { font-family: Consolas, 'Courier New', monospace; font-size: .8rem; color: #5f6b7a; }
   .dl-error { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: #fdecea; color: #b42318; font-size: .9rem; }
   .dl-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
   .dl-actions button { border-radius: 6px; padding: 9px 16px; font-size: .95rem; cursor: pointer; }
@@ -134,7 +135,7 @@
 
     <div class="dl-steps">
       <table>
-        <thead><tr><th>Order</th><th>Silo</th><th>Material</th><th>Set (kg)</th><th>Fine (kg)</th><th>Tol (kg)</th></tr></thead>
+        <thead><tr><th>Order</th><th>Silo</th><th>Material</th><th>Set (kg)</th><th>Fine (kg)</th><th>Tol (kg)</th><th>Inflight (kg)</th><th>PLC tags</th></tr></thead>
         <tbody id="dlSteps"></tbody>
       </table>
     </div>
@@ -600,6 +601,10 @@ function buildTable(category, rows) {
                     Tolerance(kg)
                 </th>
 
+                <th class="col-inflight" title="Material still falling after the feeder stops - sent to Recipe_Data[silo].InflightWeight">
+                    Inflight Weight(Kg)
+                </th>
+
                 <th class="col-cspeed">
                     Coarse Speed(%)
                 </th>
@@ -657,6 +662,10 @@ function buildTable(category, rows) {
 
                     <td>
                         ${r.Tolerance}
+                    </td>
+
+                    <td class="col-inflight">
+                        ${r.InflightWeight ?? 0}
                     </td>
 
                     <td class="col-cspeed">
@@ -742,6 +751,7 @@ function buildTable(category, rows) {
       <td><input class="edit-input set"></td>
       <td><input class="edit-input fine"></td>
       <td><input class="edit-input tol"></td>
+      <td class="col-inflight"><input class="edit-input inflight" value="0"></td>
       <td class="col-cspeed"><input class="edit-input cspeed"></td>
       <td class="col-fspeed"><input class="edit-input fspeed"></td>
       <td class="action-cell">
@@ -776,6 +786,9 @@ function buildTable(category, rows) {
       const set = Number(tr.querySelector(".set").value);
       const fine = Number(tr.querySelector(".fine").value);
       const tol = Number(tr.querySelector(".tol").value);
+      const inflight = Number(tr.querySelector(".inflight").value || 0);
+      if (!Number.isFinite(inflight) || inflight < 0) return alert("❌ Inflight Weight must be 0 or more!");
+      if (inflight > set) return alert("❌ Inflight Weight must be ≤ Set Weight!");
       // New Cols
       const cspeed = Number(tr.querySelector(".cspeed").value);
       const fspeed = Number(tr.querySelector(".fspeed").value);
@@ -793,6 +806,7 @@ function buildTable(category, rows) {
         SetWeight: set,
         FineWeight: fine,
         Tolerance: tol,
+        InflightWeight: inflight,
         Category: category,
         // New Cols
         CoarseSpeed: cspeed,
@@ -835,7 +849,11 @@ document.addEventListener("click", async (e) => {
 
         row.classList.add("editing");
 
-        const tds = row.querySelectorAll("td:not(.step-cell)");
+        // Positions below skip the Order and Inflight cells (handled by class)
+        const tds = row.querySelectorAll("td:not(.step-cell):not(.col-inflight)");
+        const inflightTd = row.querySelector("td.col-inflight");
+        inflightTd.innerHTML =
+            `<input class="edit-input edit-inflight" value="${inflightTd.innerText.trim() || 0}">`;
 
         const silo = tds[1].innerText.trim();
         const mat = tds[2].innerText.trim();
@@ -950,6 +968,13 @@ document.addEventListener("click", async (e) => {
                             .value
                     );
 
+                const inflight =
+                    Number(
+                        inflightTd
+                            .querySelector(".edit-inflight")
+                            .value || 0
+                    );
+
                 const cspeed =
                     Number(
                         tds[6]
@@ -979,6 +1004,14 @@ document.addEventListener("click", async (e) => {
 
                     return alert(
                         "❌ Tolerance must be ≤ Set Weight!"
+                    );
+
+                }
+
+                if (!Number.isFinite(inflight) || inflight < 0 || inflight > set) {
+
+                    return alert(
+                        "❌ Inflight Weight must be between 0 and Set Weight!"
                     );
 
                 }
@@ -1027,6 +1060,9 @@ document.addEventListener("click", async (e) => {
 
                     Tolerance:
                         tol,
+
+                    InflightWeight:
+                        inflight,
 
                     CoarseSpeed:
                         cspeed,
@@ -1641,10 +1677,13 @@ loadColumnSetting()
             document.getElementById("dlRecipe").textContent = p.recipe;
             document.getElementById("dlPlc").textContent = `${p.driver_name}  ·  ${p.plc}`;
             document.getElementById("dlCount").textContent =
-                `${p.steps.length} step${p.steps.length === 1 ? "" : "s"} (PLC has ${p.slots} slots)`;
+                `${p.steps.length} silo${p.steps.length === 1 ? "" : "s"} · Order → Recipe_Data[silo].Order`
+                + (p.not_sent && p.not_sent.length
+                    ? ` · not in tag table, not sent: ${p.not_sent.join(", ")}` : "");
             document.getElementById("dlSteps").innerHTML = p.steps.map(s => `
                 <tr><td>${s.step}</td><td>${esc(s.silo)}</td><td>${esc(s.material)}</td>
-                    <td>${esc(s.set_weight)}</td><td>${esc(s.fine_weight)}</td><td>${esc(s.tolerance)}</td></tr>
+                    <td>${esc(s.set_weight)}</td><td>${esc(s.fine_weight)}</td><td>${esc(s.tolerance)}</td>
+                    <td>${esc(s.inflight)}</td><td class="dl-addr">${esc(s.address)}</td></tr>
             `).join("");
 
             okBtn.textContent = `Download to Mixer ${p.mixer}`;

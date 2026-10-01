@@ -320,7 +320,9 @@ def get_recipe_table(category):
     query = """
         SELECT r."Index", r."SiloNo",
             COALESCE(m."MaterialName", r."MaterialName") AS "MaterialName",
-            r."SetWeight", r."FineWeight", r."Tolerance", r."CoarseSpeed", r."FineSpeed"
+            r."SetWeight", r."FineWeight", r."Tolerance",
+            COALESCE(r."InflightWeight", 0) AS "InflightWeight",
+            r."CoarseSpeed", r."FineSpeed"
         FROM "recipeData" r
         LEFT JOIN "MaterialData" m ON r."SiloNo" = m."SiloNo"
         WHERE r."Category" = %s
@@ -421,8 +423,9 @@ def add_row():
         normalize_recipe_seq(cursorWrite, category)
         cursorWrite.execute("""
             INSERT INTO "recipeData"
-                ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "Category", "CoarseSpeed", "FineSpeed", "Seq")
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
+                ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "InflightWeight",
+                 "Category", "CoarseSpeed", "FineSpeed", "Seq")
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
                     (SELECT COALESCE(MAX("Seq"), 0) + 1 FROM "recipeData" WHERE "Category" = %s))
         """, (
             silo,
@@ -430,6 +433,7 @@ def add_row():
             data.get("SetWeight"),
             data.get("FineWeight"),
             data.get("Tolerance"),
+            data.get("InflightWeight") or 0,
             category,
             data.get("CoarseSpeed"),
             data.get("FineSpeed"),
@@ -468,6 +472,7 @@ def export_recipe_data():
                 r."SetWeight",
                 r."FineWeight",
                 r."Tolerance",
+                COALESCE(r."InflightWeight", 0) AS "InflightWeight",
                 r."CoarseSpeed",
                 r."FineSpeed"
 
@@ -526,6 +531,10 @@ def import_recipe_excel():
         for col in required_cols:
             if col not in df.columns:
                 return jsonify({"success": False, "error": f"Missing column: {col}"}), 400
+        # Optional: recipe files exported before this column existed
+        if "InflightWeight" not in df.columns:
+            df["InflightWeight"] = 0
+        df["InflightWeight"] = pd.to_numeric(df["InflightWeight"], errors="coerce").fillna(0)
 
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
@@ -555,14 +564,16 @@ def import_recipe_excel():
 
             cursorWrite.execute("""
                 INSERT INTO "recipeData"
-                    ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "CoarseSpeed", "FineSpeed", "Category", "Seq")
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ("SiloNo", "MaterialName", "SetWeight", "FineWeight", "Tolerance", "InflightWeight",
+                     "CoarseSpeed", "FineSpeed", "Category", "Seq")
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 silo,
                 mr[0],                              # MaterialName from MaterialData
                 row["SetWeight"],
                 row["FineWeight"],
                 row["Tolerance"],
+                float(row["InflightWeight"]),
                 row["CoarseSpeed"],
                 row["FineSpeed"],
                 category,
@@ -586,6 +597,7 @@ def update_row(index):
     set_weight = data.get("SetWeight")
     fine_weight = data.get("FineWeight")
     tolerance = data.get("Tolerance")
+    inflight = data.get("InflightWeight") or 0
     CoarseSpeed = data.get("CoarseSpeed")
     FineSpeed = data.get("FineSpeed")
 
@@ -636,6 +648,7 @@ def update_row(index):
                 "SetWeight" = %s,
                 "FineWeight" = %s,
                 "Tolerance" = %s,
+                "InflightWeight" = %s,
                 "CoarseSpeed" = %s,
                 "FineSpeed" = %s
             WHERE "Index" = %s
@@ -646,6 +659,7 @@ def update_row(index):
             set_weight,
             fine_weight,
             tolerance,
+            inflight,
             CoarseSpeed,
             FineSpeed,
             index
@@ -876,32 +890,64 @@ def api_plc_data_excel():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# Report / Export column order (same as the report table)
+REPORT_EXPORT_COLUMNS = ["BatchNo", "TimeStamp", "Shift", "Plant Name", "Recipe Name", "Mixer No",
+                         "Start Date Time", "End Date Time",
+                         "Total Set Weight(Kg)", "Total Actual Weight(Kg)"]
+
+
 @app.route('/api/export_data', methods=['POST'])
 def api_export_data():
+    """Excel of the report rows. With "batch_nos" (the rows left after the
+    search box filter) only those batches are exported."""
     try:
-        payload = request.get_json()
+        payload = request.get_json(silent=True) or {}
         hours = payload.get('hours')
         from_time = payload.get('from_time')
         to_time = payload.get('to_time')
+        batch_nos = payload.get('batch_nos')
+        search = (payload.get('search') or "").strip()
 
-        print(f" Export requested → Hours: {hours}, From: {from_time}, To: {to_time}")
-        conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
-        engine, engineConRead, engineConWrite = sqliteCon.get_db_connection_engine()
-
-        df = sqliteCon.data_batch(conn, hours, from_time, to_time, engineConRead)
-
-        if df is None or df.empty:
+        result = main.data_process(hours, from_time, to_time)
+        df = pd.DataFrame(result.get("data") or [])
+        if df.empty:
             return jsonify({"success": False, "error": "No data available to export"}), 400
 
-        #  Create Excel in-memory (no file saved on disk)
+        if batch_nos is not None:
+            wanted = {int(b) for b in batch_nos if str(b).strip().lstrip("-").isdigit()}
+            df = df[df["BatchNo"].astype(int).isin(wanted)]
+            if df.empty:
+                return jsonify({"success": False, "error": "No rows match the search"}), 400
+
+        cols = [c for c in REPORT_EXPORT_COLUMNS if c in df.columns]
+        cols += [c for c in df.columns if c not in cols]
+        df = df[cols]
+
+        totals = {c: "" for c in cols}
+        totals[cols[0]] = f"Total ({len(df)} batches)"
+        for c in ("Total Set Weight(Kg)", "Total Actual Weight(Kg)"):
+            if c in df.columns:
+                totals[c] = round(pd.to_numeric(df[c], errors="coerce").sum(), 2)
+
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='ReportData')
-        output.seek(0)  # VERY IMPORTANT — reset file pointer!
+            info = [f"Range: {from_time or ''} to {to_time or ''}" if hours == "Custom" else f"Range: last {hours}"]
+            if search:
+                info.append(f'Filter: "{search}"')
+            df.to_excel(writer, index=False, sheet_name='ReportData', startrow=2)
+            ws = writer.sheets['ReportData']
+            bold = writer.book.add_format({"bold": True})
+            ws.write(0, 0, "  |  ".join(info), bold)
+            last = len(df) + 3
+            for i, c in enumerate(cols):
+                ws.write(last, i, totals[c], bold)
+                width = max([len(str(c))] + [len(str(v)) for v in df[c].head(500)]) + 2
+                ws.set_column(i, i, min(width, 40))
+            ws.freeze_panes(3, 0)
+            ws.autofilter(2, 0, len(df) + 2, len(cols) - 1)
+        output.seek(0)
 
-        # Create dynamic file name
         filename = f"Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-
         return send_file(
             output,
             as_attachment=True,
@@ -910,8 +956,37 @@ def api_export_data():
         )
 
     except Exception as e:
-        print(f" Export Error: {e}")
+        logging.exception("Export failed")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/settings/shift_times', methods=['GET', 'POST'])
+def shift_times():
+    """Shift start times, e.g. "A=06:00,B=14:00,C=22:00" (Info_db Shift_Times)."""
+    from modules import shift as shift_mod
+    conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+    try:
+        if request.method == 'GET':
+            return jsonify(success=True, shift_times=shift_mod.to_text(shift_mod.load(cursorRead)))
+
+        if session.get('role') not in ('admin', 'superadmin'):
+            return jsonify(success=False, message="Only an admin can change the shift times"), 403
+        text_value = (request.get_json(silent=True) or {}).get("shift_times", "")
+        try:
+            shifts = shift_mod.parse(text_value)
+        except ValueError as e:
+            return jsonify(success=False, message=str(e)), 400
+        value = shift_mod.to_text(shifts)
+        cursorWrite.execute('UPDATE "Info_db" SET "Info" = %s WHERE "Particulars" = %s',
+                            (value, shift_mod.INFO_KEY))
+        if cursorWrite.rowcount == 0:
+            cursorWrite.execute('INSERT INTO "Info_db" ("Id", "Particulars", "Info") '
+                                'SELECT COALESCE(MAX("Id"), 0) + 1, %s, %s FROM "Info_db"',
+                                (shift_mod.INFO_KEY, value))
+        conn.commit()
+        return jsonify(success=True, shift_times=value, message=f"Shift times saved: {value}")
+    finally:
+        conn.close()
 
 
 @app.route('/analytics')

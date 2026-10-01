@@ -50,6 +50,23 @@
                 </div>
             </div>
 
+            <div class="form-row">
+                <label>Shift Start Times</label>
+                <div class="input-group">
+                    <input
+                        type="text"
+                        id="shiftTimesInput"
+                        placeholder="A=06:00,B=14:00,C=22:00"
+                        title="Each shift's start time (24 h). A batch belongs to the shift running at its start time.">
+
+                    <button
+                        id="setShiftTimesBtn"
+                        class="set-button">
+                        Save
+                    </button>
+                </div>
+            </div>
+
             <!-- Hidden Logo Upload Input -->
             <input
                 type="file"
@@ -439,6 +456,29 @@ async function sendUpdateRequest(formData) {
 
 }
 
+
+// ---- Shift start times (used for the Shift column in reports) ----
+(async () => {
+    const input = document.getElementById("shiftTimesInput");
+    const btn = document.getElementById("setShiftTimesBtn");
+    if (!input || !btn) return;
+    try {
+        const d = await (await fetch("/api/settings/shift_times")).json();
+        if (d.success) input.value = d.shift_times;
+    } catch (e) { console.error(e); }
+    btn.addEventListener("click", async () => {
+        try {
+            const r = await fetch("/api/settings/shift_times", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ shift_times: input.value })
+            });
+            const d = await r.json();
+            if (d.success) input.value = d.shift_times;
+            alert(d.message || (d.success ? "Saved" : "Could not save shift times"));
+        } catch (e) { alert("Server error - shift times not saved"); }
+    });
+})();
 </script>
 
 <!-- ===================================== -->

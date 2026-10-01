@@ -166,12 +166,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   /* ================= TABLE ================= */
   // Report columns in this order; any other columns follow at the end
-  const COLUMN_ORDER = ["BatchNo", "TimeStamp", "Plant Name", "Recipe Name",
+  const COLUMN_ORDER = ["BatchNo", "TimeStamp", "Shift", "Plant Name", "Recipe Name", "Mixer No",
                         "Start Date Time", "End Date Time"];
 
   function orderColumns(keys) {
     const first = COLUMN_ORDER.filter(c => keys.includes(c));
-    const weight = keys.filter(c => c.startsWith("Total Batch Weight"));
+    const WEIGHT_ORDER = ["Total Set Weight(Kg)", "Total Actual Weight(Kg)"];
+    const weight = keys.filter(c => c.startsWith("Total "))
+      .sort((a, b) => (WEIGHT_ORDER.indexOf(a) + 1 || 99) - (WEIGHT_ORDER.indexOf(b) + 1 || 99));
     const rest = keys.filter(c => !first.includes(c) && !weight.includes(c));
     return [...first, ...rest, ...weight];
   }
@@ -186,7 +188,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const cols = orderColumns(Object.keys(data[0]));
     tableHead.innerHTML = `<tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>`;
     tableBody.innerHTML = data.map(r =>
-      `<tr onclick="openPopup('${r.BatchNo}')">
+      `<tr data-batch="${r.BatchNo}" onclick="openPopup('${r.BatchNo}')">
         ${cols.map(c => `<td>${r[c]}</td>`).join("")}
       </tr>`
     ).join("");
@@ -222,7 +224,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const table   = JSON.parse(localStorage.getItem("report_table"));
     const total   = localStorage.getItem("report_total");
 
-    if (filters && table) {
+    if (filters && table && (!table.length || "Shift" in table[0])) {
       hourSelect.value = filters.hours;
       fromDate.value = filters.from_time;
       toDate.value = filters.to_time;
@@ -283,33 +285,53 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   
   /* ================= EXPORT ================= */
+  // Exports what the table shows: with text in the search box only the
+  // matching rows (Mixer No, Shift, Total Set / Actual Weight included).
   exportBtn.addEventListener("click", async () => {
 
     const hours = hourSelect.value;
     const from_time = fromDate.value;
     const to_time = toDate.value;
+    const search = searchInput.value.trim();
 
-    const res = await fetch("/api/export_data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hours, from_time, to_time })
-    });
+    const visible = Array.from(tableBody.querySelectorAll("tr[data-batch]"))
+      .filter(tr => tr.style.display !== "none")
+      .map(tr => Number(tr.dataset.batch));
 
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
+    if (search && !visible.length) return alert("No rows match the search - nothing to export.");
 
-    // Make filename safe (replace ":" with "-")
-    const safeFrom = from_time.replace(/[:T]/g, "-");
-    const safeTo = to_time.replace(/[:T]/g, "-");
+    const body = { hours, from_time, to_time, search };
+    if (search) body.batch_nos = visible;
 
-    const filename = `SKEW_Batchs_Report_${safeFrom}_to_${safeTo}.xlsx`;
+    exportBtn.disabled = true;
+    try {
+      const res = await fetch("/api/export_data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        let msg = `Export failed (${res.status})`;
+        try { msg = (await res.json()).error || msg; } catch {}
+        return alert(msg);
+      }
 
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
 
-    URL.revokeObjectURL(url);
+      // Make filename safe (replace ":" with "-")
+      const safeFrom = (from_time || hours).replace(/[:T ]/g, "-");
+      const safeTo = (to_time || "now").replace(/[:T ]/g, "-");
+      const tag = search ? `_filtered-${search.replace(/[^\w-]+/g, "_").slice(0, 30)}` : "";
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `SKEW_Batchs_Report_${safeFrom}_to_${safeTo}${tag}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      exportBtn.disabled = false;
+    }
   });
 
 
@@ -386,6 +408,7 @@ document.addEventListener("DOMContentLoaded", () => {
       ["Plant Name", fmt(d["Plant Name"])],
       ["Recipe Name", fmt(d["Recipe Name"])],
       ["Mixer No", fmt(d["Mixer Selected"])],
+      ["Shift", fmt(d.Shift)],
       ["Start Date Time", fmt(d["Start Date Time"])],
       ["End Date Time", fmt(d["End Date Time"])],
       ["Batch Time", minutes === null ? "--" : `${minutes} min`],

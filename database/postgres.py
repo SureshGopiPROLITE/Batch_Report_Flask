@@ -73,6 +73,9 @@ def ensure_indexes():
         'CREATE INDEX IF NOT EXISTS ix_plc_data_batchno ON plc_data ("BatchNo")',
         'CREATE INDEX IF NOT EXISTS ix_batches_timestamp ON "Batches" ("TimeStamp")',
         'ALTER TABLE "recipeData" ADD COLUMN IF NOT EXISTS "Seq" integer',
+        # Material still falling after the feeder stops (kg); written to the
+        # PLC tag Recipe_Data[silo].InflightWeight
+        'ALTER TABLE "recipeData" ADD COLUMN IF NOT EXISTS "InflightWeight" double precision DEFAULT 0',
         # "Index" is the row id that edit / delete / reorder / download use.
         # It never had a default, so every row added through the app got NULL
         # and all of a recipe's rows looked like one. Give it a sequence and

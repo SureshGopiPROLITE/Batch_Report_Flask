@@ -12,6 +12,7 @@ import psycopg2
 from psycopg2 import sql
 import pandas as pd
 from modules.batch_summary import calculate_batch_summary, clean_plc_datetime
+from modules import shift
 
 # === Logging Setup ===
 logging.basicConfig(
@@ -38,6 +39,64 @@ def df_split(dfPlcdb):
     except Exception as e:    
         print(f" ERROR: {e}")
 
+
+
+BATCH_EXTRA_NAMES = ("Mixer Selected", "Shift", "Start Date Time",
+                     "TotalBatchSetWeight", "TotalBatchActualWeight", "SetWeight", "ActualWeight")
+
+
+def batch_extras(batch_nos, logged_at=None):
+    """Per batch: Mixer No, Shift, Total Set / Actual Weight (kg), from plc_data.
+    Batches logged before the summary rows existed use the sum of their silos."""
+    cols = ["BatchNo", "Mixer No", "Shift", "Total Set Weight(Kg)", "Total Actual Weight(Kg)"]
+    batch_nos = [int(b) for b in batch_nos]
+    if not batch_nos:
+        return pd.DataFrame(columns=cols)
+
+    conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+    try:
+        shifts = shift.load(cursorRead)
+        cursorRead.execute(
+            'SELECT "BatchNo", "Name", "Value", "Category" FROM plc_data '
+            'WHERE "BatchNo" = ANY(%s) AND "Name" = ANY(%s)',
+            (batch_nos, list(BATCH_EXTRA_NAMES)))
+        rows = pd.DataFrame(cursorRead.fetchall(), columns=["BatchNo", "Name", "Value", "Category"])
+    finally:
+        conn.close()
+
+    logged_at = logged_at or {}
+    out = pd.DataFrame({"BatchNo": batch_nos})
+    rows["Num"] = pd.to_numeric(rows["Value"], errors="coerce")
+
+    # One pass over all batches (a per-batch loop took > 1 min for 2 months)
+    info = rows[rows["Category"] == "Info"].pivot_table(
+        index="BatchNo", columns="Name", values="Value", aggfunc="last")
+    summary = rows[rows["Category"] == "Summary"].pivot_table(
+        index="BatchNo", columns="Name", values="Num", aggfunc="last")
+    silos = rows[~rows["Category"].isin(["Info", "Summary"])].pivot_table(
+        index="BatchNo", columns="Name", values="Num", aggfunc="sum")
+    for frame, names in ((info, ("Mixer Selected", "Shift", "Start Date Time")),
+                         (summary, ("TotalBatchSetWeight", "TotalBatchActualWeight")),
+                         (silos, ("SetWeight", "ActualWeight"))):
+        for n in names:
+            if n not in frame.columns:
+                frame[n] = None
+    out = (out.merge(info[["Mixer Selected", "Shift", "Start Date Time"]], left_on="BatchNo", right_index=True, how="left")
+              .merge(summary[["TotalBatchSetWeight", "TotalBatchActualWeight"]], left_on="BatchNo", right_index=True, how="left")
+              .merge(silos[["SetWeight", "ActualWeight"]], left_on="BatchNo", right_index=True, how="left"))
+
+    # Batches logged before the summary rows existed: sum of their silos
+    set_total = pd.to_numeric(out["TotalBatchSetWeight"], errors="coerce").fillna(pd.to_numeric(out["SetWeight"], errors="coerce"))
+    act_total = pd.to_numeric(out["TotalBatchActualWeight"], errors="coerce").fillna(pd.to_numeric(out["ActualWeight"], errors="coerce"))
+    mixer = out["Mixer Selected"].astype(str).str.strip()
+    out["Mixer No"] = mixer.where(~mixer.isin(["None", "nan", "<NA>"]), "")
+    out["Shift"] = [
+        shift.for_batch({"Shift": sh, "Start Date Time": st}, shifts, logged_at.get(b))
+        for b, sh, st in zip(out["BatchNo"], out["Shift"], out["Start Date Time"])
+    ]
+    out["Total Set Weight(Kg)"] = set_total.fillna(0).round(2)
+    out["Total Actual Weight(Kg)"] = act_total.fillna(0).round(2)
+    return out[cols]
 
 
 def data_process(hours, from_time, to_time):
@@ -111,18 +170,19 @@ def data_process(hours, from_time, to_time):
         )
 
         # -------------------------
+        # Mixer No, Shift, Total Set / Actual Weight per batch
+        # (searchable in the report and included in the Export)
+        # -------------------------
+        logged = dict(zip(df["BatchNo"], df["TimeStamp"])) if "TimeStamp" in df.columns else {}
+        df = df.merge(batch_extras(df["BatchNo"].tolist(), logged), on="BatchNo", how="left")
+        df = df.drop(columns=[c for c in ("Total Batch Weight",) if c in df.columns])
+
+        # -------------------------
         # Sort latest batches first
         # -------------------------
         df = df.sort_values(
             by="BatchNo",
             ascending=False
-        )
-
-        # Rename column
-        df = df.rename(
-            columns={
-                "Total Batch Weight": "Total Batch Weight(Kg)"
-            }
         )
 
         # -------------------------
@@ -415,6 +475,17 @@ def report_data_process(batch_no):
                 .fillna(0)
                 .astype(int)
             )
+
+        # Shift for popup / PDF / Excel: the PLC's Shift tag if it sends one,
+        # otherwise from the batch start time and the Settings shift times
+        if df_string.empty or "Shift" not in set(df_string["Name"]):
+            shifts = shift.load(cursorRead)
+            info = dict(zip(df_string["Name"], df_string["Value"])) if not df_string.empty else {}
+            logged = df_string["TimeStamp"].min() if "TimeStamp" in df_string.columns and not df_string.empty else None
+            df_string = pd.concat([df_string, pd.DataFrame([{
+                "Name": "Shift", "Value": shift.for_batch(info, shifts, logged),
+                "Category": "Info", "BatchNo": batch_no,
+            }])], ignore_index=True)
 
         return (
             df_pivot,
