@@ -218,6 +218,18 @@ document.addEventListener("DOMContentLoaded", async () => {
           MaterialCode: inputs[2].value.trim()
         };
 
+        // New material in the silo -> Total Consumption starts again from 0
+        const oldName = inputs[1].defaultValue.trim(), oldCode = inputs[2].defaultValue.trim();
+        if ((updated.MaterialName !== oldName || updated.MaterialCode !== oldCode) &&
+            !confirm(`Material changed for Silo ${siloNo}:
+` +
+                     `${oldName || "-"} (${oldCode || "-"})  ->  ${updated.MaterialName || "-"} (${updated.MaterialCode || "-"})
+
+` +
+                     `Total Consumption (Kg) will be reset to 0. Continue?`)) {
+          return;
+        }
+
         const res = await fetch(`/api/stocks/update/${siloNo}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },

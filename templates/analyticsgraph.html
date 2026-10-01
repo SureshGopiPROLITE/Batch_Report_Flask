@@ -84,11 +84,8 @@ async function restoreGraphSession() {
 
   // Default values if Data View has never been opened
   if (!savedFilters) {
-    savedFilters = {
-      hours: "Custom",
-      from_time: "2025-05-01T00:00",
-      to_time: "2025-06-30T23:59"
-    };
+    const r = defaultRange();   // last 24 hours
+    savedFilters = { hours: r.hours, from_time: r.from, to_time: r.to };
   }
 
   // Restore controls

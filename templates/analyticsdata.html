@@ -183,9 +183,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   /* ===== INITIAL DEFAULT LOAD ===== */
   if (!sessionStorage.getItem("analytics_filters")) {
-    hourSelect.value = "Custom";
-    fromDate.value = "2025-05-01T00:00";
-    toDate.value = "2025-06-30T23:59";
+    setDefaultRange(hourSelect, fromDate, toDate);   // last 24 hours
 
     setTimeout(() => viewBtn.click(), 200);
   }

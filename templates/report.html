@@ -1,5 +1,18 @@
 {% extends 'base.html' %}
 {% block content %}
+<style>
+  .batch-details { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+                   gap: 6px 16px; background: #f4f7fb; border: 1px solid #d5dbe3; border-radius: 6px;
+                   padding: 10px 14px; margin: 4px 0 12px; }
+  .batch-detail { display: flex; flex-direction: column; min-width: 0; }
+  .batch-detail span { font-size: .72rem; color: #5f6b7a; text-transform: uppercase; letter-spacing: .03em; }
+  .report-search { display: flex; align-items: center; gap: 6px; border: 1px solid #aaa; border-radius: 4px;
+                   background: #fff; padding: 0 8px; height: 4vh; min-width: 220px; }
+  .report-search i { color: #5f6b7a; }
+  .report-search input { border: none; outline: none; flex: 1; min-width: 0; font-size: .9rem; background: transparent; }
+  .report-search span { font-size: .78rem; color: #5f6b7a; white-space: nowrap; }
+  .batch-detail b { font-size: .92rem; color: #1f2933; font-weight: 600; overflow-wrap: anywhere; }
+</style>
 
 <!-- =============================== REPORT HEADER =============================== -->
 <div class="inv-navbar">
@@ -8,6 +21,12 @@
   </div>
 
   <div class="inv-navbar-right">
+    <div class="report-search">
+      <i class="bx bx-search"></i>
+      <input type="search" id="reportSearch" placeholder="Search batch, recipe, plant..." autocomplete="off">
+      <span id="searchCount"></span>
+    </div>
+
     <select id="hourSelect" class="inv-select">
       <option value="1 Hr">1 Hr</option>
       <option value="4 Hr">4 Hr</option>
@@ -48,6 +67,7 @@
 <div id="popupModal" class="popup-overlay" style="display:none;">
   <div class="popup-content">
     <h3 id="popupTitle">PLC Data</h3>
+    <div id="popupDetails" class="batch-details"></div>
 
     <div class="popup-table-wrapper">
       <table class="inv-table" id="popupTable">
@@ -145,6 +165,17 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   /* ================= TABLE ================= */
+  // Report columns in this order; any other columns follow at the end
+  const COLUMN_ORDER = ["BatchNo", "TimeStamp", "Plant Name", "Recipe Name",
+                        "Start Date Time", "End Date Time"];
+
+  function orderColumns(keys) {
+    const first = COLUMN_ORDER.filter(c => keys.includes(c));
+    const weight = keys.filter(c => c.startsWith("Total Batch Weight"));
+    const rest = keys.filter(c => !first.includes(c) && !weight.includes(c));
+    return [...first, ...rest, ...weight];
+  }
+
   function renderTable(data) {
     if (!data || !data.length) {
       tableHead.innerHTML = "<tr><th>No Data</th></tr>";
@@ -152,7 +183,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const cols = Object.keys(data[0]);
+    const cols = orderColumns(Object.keys(data[0]));
     tableHead.innerHTML = `<tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>`;
     tableBody.innerHTML = data.map(r =>
       `<tr onclick="openPopup('${r.BatchNo}')">
@@ -161,7 +192,29 @@ document.addEventListener("DOMContentLoaded", () => {
     ).join("");
 
     setTimeout(() => enableSorting(tableHead, tableBody), 10);
+    applySearch();
   }
+
+  /* ================= SEARCH ================= */
+  // Filters the rows already loaded: any text in any column, case-insensitive.
+  // Several words must all match (e.g. "feed 1605").
+  const searchInput = document.getElementById("reportSearch");
+  const searchCount = document.getElementById("searchCount");
+
+  function applySearch() {
+    const words = searchInput.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = Array.from(tableBody.querySelectorAll("tr[onclick]"));
+    let shown = 0;
+    rows.forEach(tr => {
+      const text = tr.textContent.toLowerCase();
+      const match = words.every(w => text.includes(w));
+      tr.style.display = match ? "" : "none";
+      if (match) shown++;
+    });
+    searchCount.textContent = words.length && rows.length ? `${shown} of ${rows.length}` : "";
+  }
+
+  searchInput.addEventListener("input", applySearch);
 
   /* ================= RESTORE ================= */
   async function restoreSession() {
@@ -188,9 +241,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     /* ===== INITIAL DEFAULT LOAD (REPORT) ===== */
     if (!localStorage.getItem("report_filters")) {
-      hourSelect.value = "Custom";
-      fromDate.value = "2025-05-01T00:00";
-      toDate.value = "2025-06-30T23:59";
+      setDefaultRange(hourSelect, fromDate, toDate);
 
       setTimeout(() => viewBtn.click(), 200);
     }
@@ -277,6 +328,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const r = await res.json();
     const data = r.data || [];
+    renderBatchDetails(batchNo, r.daily_batch, r.details || {}, data);
 
     if (!data.length) {
       popupHead.innerHTML = "<tr><th>No Data</th></tr>";
@@ -314,6 +366,39 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   closePopup.onclick = () => popup.style.display = "none";
+
+  function renderBatchDetails(batchNo, dailyBatch, d, rows) {
+    const num = v => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+    const sum = key => rows.reduce((t, r) => t + (num(r[key]) || 0), 0);
+
+    // Summary rows are logged with each batch; fall back to the silo rows
+    const setTotal = num(d.TotalBatchSetWeight) ?? sum("SetWeight");
+    const actTotal = num(d.TotalBatchActualWeight) ?? sum("ActualWeight");
+    const accuracy = num(d.BatchAccuracy);
+    const minutes  = num(d.BatchTimeMinutes);
+    const fmt = (v, unit = "") => v === null || v === undefined || v === "" ? "--" : `${v}${unit}`;
+    const kg = v => v === null ? "--" : `${Math.round(v * 100) / 100} kg`;
+
+    const items = [
+      ["Batch No", batchNo],
+      ["Daily Batch No", fmt(dailyBatch)],
+      ["Logged At", fmt(d.LoggedAt)],
+      ["Plant Name", fmt(d["Plant Name"])],
+      ["Recipe Name", fmt(d["Recipe Name"])],
+      ["Mixer No", fmt(d["Mixer Selected"])],
+      ["Start Date Time", fmt(d["Start Date Time"])],
+      ["End Date Time", fmt(d["End Date Time"])],
+      ["Batch Time", minutes === null ? "--" : `${minutes} min`],
+      ["Silos Used", rows.length],
+      ["Total Set Weight", kg(setTotal)],
+      ["Total Actual Weight", kg(actTotal)],
+      ["Difference", kg(actTotal - setTotal)],
+      ["Batch Accuracy", accuracy === null ? "--" : `${accuracy} %`],
+    ];
+    const esc = v => String(v).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+    document.getElementById("popupDetails").innerHTML = items.map(([label, value]) =>
+      `<div class="batch-detail"><span>${label}</span><b>${esc(value)}</b></div>`).join("");
+  }
 
 });
 

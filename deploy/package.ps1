@@ -47,7 +47,7 @@ if ($LASTEXITCODE -ne 0) { throw 'docker save failed' }
 
 Write-Step 'Copying deployment files'
 Copy-Item docker-compose.yml, .env.example, DEPLOY.md $out
-Copy-Item deploy\install.ps1 (Join-Path $out 'deploy')
+Copy-Item deploy\install.ps1, deploy\fix_db_password.ps1 (Join-Path $out 'deploy')
 Copy-Item deploy\db-init\*.sql (Join-Path $out 'deploy\db-init')
 
 Write-Step 'Creating zip'

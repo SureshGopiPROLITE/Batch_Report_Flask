@@ -9,6 +9,41 @@
 
     <!-- Mobile responsive -->
     <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <script>
+        /* Default filter range for every page: the last 24 hours (no fixed dates). */
+        function toLocalInput(d) {
+            const p = n => String(n).padStart(2, "0");
+            return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+        }
+        function defaultRange() {
+            const to = new Date();
+            const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
+            return { hours: "24 Hr", from: toLocalInput(from), to: toLocalInput(to) };
+        }
+        function setDefaultRange(hourSel, fromEl, toEl) {
+            const r = defaultRange();
+            if (hourSel) hourSel.value = r.hours;
+            if (fromEl) fromEl.value = r.from;
+            if (toEl) toEl.value = r.to;
+            return r;
+        }
+
+        /* Older versions saved a fixed 01-05-2025..30-06-2025 range as the filter;
+           drop it so the pages start from the last 24 hours instead. */
+        (function forgetOldFixedRange() {
+            const OLD_FROM = "2025-05-01T00:00", OLD_TO = "2025-06-30T23:59";
+            const isOld = f => f && f.from_time === OLD_FROM && f.to_time === OLD_TO;
+            try {
+                const rep = JSON.parse(localStorage.getItem("report_filters") || "null");
+                if (isOld(rep)) ["report_filters", "report_table", "report_total"].forEach(k => localStorage.removeItem(k));
+                if (localStorage.getItem("dash_from") === OLD_FROM && localStorage.getItem("dash_to") === OLD_TO)
+                    ["dash_from", "dash_to", "dash_hours"].forEach(k => localStorage.removeItem(k));
+                const ana = JSON.parse(sessionStorage.getItem("analytics_filters") || "null");
+                if (isOld(ana)) sessionStorage.removeItem("analytics_filters");
+            } catch (e) { /* storage blocked - nothing saved to clean */ }
+        })();
+    </script>
 </head>
 
 <body>

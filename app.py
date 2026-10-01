@@ -765,8 +765,25 @@ def api_plc_data():
             return jsonify(df_pivot)
 
         data = df_pivot.to_dict(orient="records")
-        print(type(daily_batch_no))
-        return jsonify({"success": True, "data": data, "daily_batch": int(daily_batch_no)})
+
+        # Batch header for the popup: Info tags (Plant/Recipe/Mixer/Start/End)
+        # and the Summary rows (totals, accuracy, batch time)
+        details = {}
+        logged_at = None
+        for frame in (df_string, df_cal_sum):
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                details.update(zip(frame["Name"], frame["Value"]))
+                if logged_at is None and "TimeStamp" in frame.columns:
+                    logged_at = frame["TimeStamp"].min()
+        details["LoggedAt"] = str(logged_at)[:19] if logged_at is not None else ""
+
+        try:
+            daily_batch = int(daily_batch_no)
+        except (TypeError, ValueError):
+            daily_batch = None
+
+        return jsonify({"success": True, "data": json_safe(data), "daily_batch": daily_batch,
+                        "details": json_safe(details)})
     except Exception as e:
         print(f" API Error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1688,14 +1705,27 @@ def update_stock(old_silono):
             if cursorRead.fetchone():
                 return jsonify({"success": False, "error": f"SiloNo {new_silono} already exists."})
 
+        cursorRead.execute('SELECT "MaterialName", "MaterialCode" FROM "MaterialData" WHERE "SiloNo" = %s',
+                           (old_silono,))
+        current = cursorRead.fetchone()
+        if not current:
+            return jsonify({"success": False, "error": f"SiloNo {old_silono} not found."})
+
+        # A different material in the silo: its consumption starts again from 0
+        clean = lambda v: str(v or "").strip()
+        material_changed = (clean(current[0]) != clean(data["MaterialName"]) or
+                            clean(current[1]) != clean(data["MaterialCode"]))
+
         cursorWrite.execute("""
             UPDATE "MaterialData"
-            SET "SiloNo" = %s, "MaterialName" = %s, "MaterialCode" = %s, "OperatorName" = %s
+            SET "SiloNo" = %s, "MaterialName" = %s, "MaterialCode" = %s, "OperatorName" = %s,
+                "TotalExtracted" = CASE WHEN %s THEN '0' ELSE "TotalExtracted" END
             WHERE "SiloNo" = %s
-        """, (new_silono, data["MaterialName"], data["MaterialCode"], operator_name, old_silono))
+        """, (new_silono, data["MaterialName"], data["MaterialCode"], operator_name,
+              material_changed, old_silono))
 
         conn.commit()
-        return jsonify({"success": True})
+        return jsonify({"success": True, "consumption_reset": material_changed})
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
@@ -1755,7 +1785,18 @@ def export_material_data():
 
 @app.route('/about')
 def about():
-    return render_template('about.html', app_version=os.environ.get('APP_VERSION', 'dev'))
+    from config.version import SOFTWARE_VERSION
+    version = SOFTWARE_VERSION
+    try:
+        conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+        cursorRead.execute('SELECT "Info" FROM "Info_db" WHERE "Particulars" = %s', ("Software_version",))
+        row = cursorRead.fetchone()
+        conn.close()
+        if row and row[0]:
+            version = row[0]
+    except Exception as e:
+        print(" About: could not read Software_version:", e)
+    return render_template('about.html', app_version=version)
 
 
 # --------------------------------- LICENCE ----------------------------------

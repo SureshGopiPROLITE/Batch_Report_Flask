@@ -151,9 +151,7 @@ function loadFilters() {
 
     // ✅ FIRST LOAD DEFAULT (SAFE)
     if (!from || !to || !hours) {
-        from = "2025-05-01T00:00";
-        to   = "2025-06-30T23:59";
-        hours = "Custom";
+        ({ from, to, hours } = defaultRange());   // last 24 hours
 
         saveFilters(from, to, hours);
     }

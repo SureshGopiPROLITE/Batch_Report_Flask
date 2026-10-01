@@ -89,11 +89,21 @@ def ensure_indexes():
         """ALTER TABLE "recipeData" ALTER COLUMN "Index"
            SET DEFAULT nextval('"recipeData_Index_seq"')""",
     ]
+    from config.version import SOFTWARE_VERSION
+
     conn = connect()
     try:
         with conn, conn.cursor() as cur:
             for sql in statements:
                 cur.execute(sql)
+
+            # Keep Info_db's Software_version equal to the installed software
+            cur.execute('UPDATE "Info_db" SET "Info" = %s WHERE "Particulars" = %s',
+                        (SOFTWARE_VERSION, "Software_version"))
+            if cur.rowcount == 0:
+                cur.execute('INSERT INTO "Info_db" ("Id", "Particulars", "Info") '
+                            'SELECT COALESCE(MAX("Id"), 0) + 1, %s, %s FROM "Info_db"',
+                            ("Software_version", SOFTWARE_VERSION))
     finally:
         conn.close()
 

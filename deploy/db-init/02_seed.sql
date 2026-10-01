@@ -2,7 +2,7 @@
 
 -- Info_db
 INSERT INTO "Info_db" ("Id", "Particulars", "Info") VALUES (1, 'Plc_IP', '192.168.0.1,0,1');
-INSERT INTO "Info_db" ("Id", "Particulars", "Info") VALUES (2, 'Software_version', '2.1.5');
+INSERT INTO "Info_db" ("Id", "Particulars", "Info") VALUES (2, 'Software_version', '3.1.1');
 INSERT INTO "Info_db" ("Id", "Particulars", "Info") VALUES (3, 'Release_date ', '01/01/2025');
 INSERT INTO "Info_db" ("Id", "Particulars", "Info") VALUES (4, 'Software_sold_date', '');
 INSERT INTO "Info_db" ("Id", "Particulars", "Info") VALUES (6, 'Mail', '');

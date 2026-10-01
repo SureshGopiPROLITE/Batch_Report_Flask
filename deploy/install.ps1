@@ -69,7 +69,7 @@ $envFile = Join-Path $root '.env'
 if (-not (Test-Path $envFile)) {
     Write-Step 'Creating .env'
     $text = Get-Content (Join-Path $root '.env.example') -Raw
-    $text = $text -replace '(?m)^DB_PASSWORD=.*$', ('DB_PASSWORD=' + (New-Secret 18))
+    # DB_PASSWORD comes from .env.example (fixed 12345678; the database port is not published)
     $text = $text -replace '(?m)^SECRET_KEY=.*$',  ('SECRET_KEY=' + (New-Secret 32))
     $text = $text -replace '(?m)^HOST_MAC=.*$',    ('HOST_MAC=' + (Get-HostMac))
     [System.IO.File]::WriteAllText($envFile, $text, $utf8NoBom)
@@ -101,8 +101,42 @@ if ($images) {
 }
 
 # --- 4. Start -----------------------------------------------------------------------
+function Get-EnvValue($name, $default = '') {
+    $line = (Get-Content $envFile) | Where-Object { $_ -match "^$name=" } | Select-Object -First 1
+    if ($line) { return ($line -replace "^$name=", '').Trim() } else { return $default }
+}
+
+Write-Step 'Starting the database'
+docker compose up -d postgres
+if ($LASTEXITCODE -ne 0) { throw 'docker compose up postgres failed' }
+$dbReady = $false
+for ($i = 0; $i -lt 60; $i++) {
+    $ErrorActionPreference = 'Continue'
+    $state = docker inspect -f '{{.State.Health.Status}}' batch_report_db 2>$null
+    $ErrorActionPreference = 'Stop'
+    if ($state -eq 'healthy') { $dbReady = $true; break }
+    Start-Sleep -Seconds 2
+}
+if (-not $dbReady) { throw 'The database did not start - check: docker compose logs postgres' }
+
+# Postgres keeps the password it was FIRST created with (inside the pg_data
+# volume) and ignores .env afterwards. A new .env (new folder, deleted .env)
+# then no longer matches: "password authentication failed for user postgres".
+# Set the database password to the one in .env, so .env is always right.
+# (Inside the container the local socket needs no password.)
+Write-Step 'Syncing database password with .env'
+$dbUser = Get-EnvValue 'DB_USER' 'postgres'
+$dbPass = (Get-EnvValue 'DB_PASSWORD').Replace("'", "''")
+$sql = "ALTER ROLE `"$dbUser`" WITH PASSWORD '$dbPass';"
+$ErrorActionPreference = 'Continue'
+$out = $sql | docker exec -i batch_report_db psql -v ON_ERROR_STOP=1 -q -U $dbUser -d postgres 2>&1
+$rc = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($rc -ne 0) { throw "Could not set the database password: $out" }
+
 Write-Step 'Starting SKEW'
-docker compose up -d
+# Recreate the app so it connects with the (possibly new) password
+docker compose up -d --force-recreate web
 if ($LASTEXITCODE -ne 0) { throw 'docker compose up failed' }
 
 Write-Step 'Waiting for the application'
