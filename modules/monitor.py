@@ -1,4 +1,5 @@
 import os
+import re
 import socket
 import logging
 import threading
@@ -537,6 +538,63 @@ def read_batch_values(plc, df_tags, server):
     return df
 
 
+# PLC dates arrive as separate INT tags, e.g. "Start Date Time Year" (Info) or
+# "StartTime_Min" (per silo). They are composed into one value under the base
+# name ("Start Date Time", "StartTime", ...) that reports already expect.
+DATETIME_PART_RE = re.compile(
+    r"^(?P<base>Start Date Time|End Date Time|StartTime|EndTime)[ _]"
+    r"(?P<part>Year|Month|Date|Hours|Min|Sec)$", re.IGNORECASE)
+DATETIME_BASES = {b.lower(): b for b in ("Start Date Time", "End Date Time", "StartTime", "EndTime")}
+DATETIME_PARTS = {"year": "year", "month": "month", "date": "day",
+                  "hours": "hour", "min": "minute", "sec": "second"}
+
+
+def _compose_datetime(parts):
+    """{'year': 2025, 'month': 3, ...} -> 'YYYY-MM-DD HH:MM:SS', or None if
+    a part is missing or the date is invalid (e.g. an unused silo reads 0)."""
+    try:
+        values = {k: int(float(parts[k])) for k in DATETIME_PARTS.values()}
+    except (KeyError, TypeError, ValueError):
+        return None
+    if values["year"] < 100:
+        values["year"] += 2000
+    try:
+        return datetime(**values).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def compose_datetime_tags(df):
+    """Replaces each Category's Year/Month/Date/Hours/Min/Sec rows with one
+    STRING row holding the composed date time. Tag tables that still read
+    the date as one STRING tag have no part rows and pass through unchanged."""
+    match = df["Name"].astype(str).str.strip().str.extract(DATETIME_PART_RE)
+    is_part = match["base"].notna()
+    if not is_part.any():
+        return df
+
+    composed = []
+    parts = df[is_part].assign(_base=match["base"].str.lower(), _part=match["part"].str.lower())
+    for (_, base), group in parts.groupby(["Category", "_base"], sort=False):
+        values = {DATETIME_PARTS[p]: v for p, v in zip(group["_part"], group["Value"])}
+        row = group.iloc[0].drop(["_base", "_part"]).copy()
+        row["Name"] = DATETIME_BASES[base]
+        row["data_type"] = "STRING"
+        value = _compose_datetime(values)
+        if value is None:
+            if any(pd.to_numeric(pd.Series(list(values.values())), errors="coerce").fillna(0) != 0):
+                logging.warning(f"{row['Category']} {row['Name']}: invalid PLC date parts {values}")
+            # Same as the old STRING read: header -> None, silo -> ""
+            value = None if row["Category"] == "Info" else ""
+        row["Value"] = value
+        composed.append((group.index[0], row))
+
+    out = df[~is_part]
+    extra = pd.DataFrame([r for _, r in composed], index=[i for i, _ in composed])
+    # Keep the composed row where its first part row was
+    return pd.concat([out, extra]).sort_index().reset_index(drop=True)
+
+
 def _next_batch_numbers(cur):
     """(BatchNo, DailyBatchNo). The daily counter lives in Info_db under
     'Batch_no' / 'Last_Date' and is updated in the caller's transaction."""
@@ -645,6 +703,8 @@ def run_logging(plc, df_tags, server):
             missing = dfPlcdb.loc[dfPlcdb["Value"].isnull(), "Name"].unique().tolist()
             if missing:
                 raise ValueError(f"No value read for {missing} - check PLC connection/tag table")
+
+            dfPlcdb = compose_datetime_tags(dfPlcdb)
 
             conn = postgres.connect()
             with conn:                       # commit on success, rollback on any error
