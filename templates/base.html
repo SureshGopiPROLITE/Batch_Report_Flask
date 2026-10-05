@@ -106,8 +106,12 @@
                     <a href="{{ url_for('recipe') }}"><i class="bx bx-atom"></i> Recipe</a>
                 </li>
 
+                <li class="{% if request.path == url_for('total_stocks') %}active{% endif %}">
+                    <a href="{{ url_for('total_stocks') }}"><i class="bx bx-list-ul"></i> Total Stock</a>
+                </li>
+
                 <li class="{% if request.path == url_for('stocks') %}active{% endif %}">
-                    <a href="{{ url_for('stocks') }}"><i class="bx bxs-box"></i> Stocks</a>
+                    <a href="{{ url_for('stocks') }}"><i class="bx bxs-box"></i> Silo Stock</a>
                 </li>
 
                 <li class="{% if '/analytics' in request.path %}active{% endif %}">

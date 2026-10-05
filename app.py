@@ -1750,6 +1750,19 @@ def is_admin():
     return session.get("role") in ["admin", "superadmin"]
 
 
+def can_edit_stock():
+    """Stock pages: anyone logged in except operators may change data
+    (the buttons are disabled for them too)."""
+    return 'username' in session and session.get("role") != "operator"
+
+
+STOCK_DENIED = ({"success": False, "error": "Access Denied"}, 403)
+
+
+def _fmt_time(value):
+    return value.strftime("%d-%m-%Y %H:%M:%S") if isinstance(value, datetime) else ""
+
+
 @app.route('/stocks')
 def stocks():
     user_logged_in = 'username' in session
@@ -1764,14 +1777,16 @@ def stocks():
     )
 
 
-#  API Route — returns live data for the Stocks table
+#  API Route — returns live data for the Silo Stock table
 @app.route("/api/stocks", methods=["GET"])
 def get_stocks_data():
+    conn = None
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
         query = """
-            SELECT "SiloNo", "MaterialName", "MaterialCode", "OperatorName", "TotalExtracted"
+            SELECT "SiloNo", "MaterialName", "MaterialCode", "OperatorName", "TotalExtracted",
+                   "UpdatedAt"
             FROM "MaterialData"
         """
         df = pd.read_sql(query, conn)
@@ -1785,6 +1800,8 @@ def get_stocks_data():
         df["SiloNo"] = pd.to_numeric(df["SiloNo"], errors="coerce")
         df = df.dropna(subset=["SiloNo"])
         df["SiloNo"] = df["SiloNo"].astype(int)
+
+        df["UpdatedAt"] = pd.to_datetime(df["UpdatedAt"], errors="coerce").dt.strftime("%d-%m-%Y %H:%M:%S")
 
         # Fill remaining NaN values
         df = df.fillna("")
@@ -1805,15 +1822,16 @@ def get_stocks_data():
         return jsonify({"success": False, "error": str(e)})
 
     finally:
-        try:
+        if conn:
             conn.close()
-        except:
-            pass
 
 
 # Add new stock
 @app.route("/api/stocks/add", methods=["POST"])
 def add_stock():
+    if not can_edit_stock():
+        return STOCK_DENIED
+    conn = None
     try:
         data = request.get_json()
         silono = data["SiloNo"]
@@ -1827,8 +1845,9 @@ def add_stock():
             return jsonify({"success": False, "error": f"SiloNo {silono} already exists."})
 
         cursorWrite.execute("""
-            INSERT INTO "MaterialData" ("SiloNo", "MaterialName", "MaterialCode", "OperatorName")
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO "MaterialData" ("SiloNo", "MaterialName", "MaterialCode", "OperatorName",
+                                        "UpdatedAt")
+            VALUES (%s, %s, %s, %s, now())
         """, (silono, data["MaterialName"], data["MaterialCode"], operator_name))
 
         conn.commit()
@@ -1837,10 +1856,17 @@ def add_stock():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+    finally:
+        if conn:
+            conn.close()
+
 
 # Update existing stock
 @app.route("/api/stocks/update/<string:old_silono>", methods=["PUT"])
 def update_stock(old_silono):
+    if not can_edit_stock():
+        return STOCK_DENIED
+    conn = None
     try:
         data = request.get_json()
         new_silono = data["SiloNo"]
@@ -1868,7 +1894,8 @@ def update_stock(old_silono):
         cursorWrite.execute("""
             UPDATE "MaterialData"
             SET "SiloNo" = %s, "MaterialName" = %s, "MaterialCode" = %s, "OperatorName" = %s,
-                "TotalExtracted" = CASE WHEN %s THEN '0' ELSE "TotalExtracted" END
+                "TotalExtracted" = CASE WHEN %s THEN '0' ELSE "TotalExtracted" END,
+                "UpdatedAt" = now()
             WHERE "SiloNo" = %s
         """, (new_silono, data["MaterialName"], data["MaterialCode"], operator_name,
               material_changed, old_silono))
@@ -1879,10 +1906,42 @@ def update_stock(old_silono):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+    finally:
+        if conn:
+            conn.close()
+
+
+# Reset a silo's Total Consumption (Kg) to 0, e.g. after the silo is refilled
+@app.route("/api/stocks/reset/<string:silono>", methods=["POST"])
+def reset_stock(silono):
+    if not can_edit_stock():
+        return STOCK_DENIED
+    conn = None
+    try:
+        user = session.get("username", "Unknown")
+        conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+        cursorWrite.execute("""
+            UPDATE "MaterialData" SET "TotalExtracted" = '0', "UpdatedAt" = now(), "OperatorName" = %s
+            WHERE "SiloNo" = %s
+        """, (user, silono))
+        if cursorWrite.rowcount == 0:
+            return jsonify({"success": False, "error": f"SiloNo {silono} not found."})
+        conn.commit()
+        logging.info(f"Silo {silono} consumption reset to 0 by {user}")
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+    finally:
+        if conn:
+            conn.close()
+
 
 # Delete stock by SiloNo
 @app.route("/api/stocks/delete/<string:silono>", methods=["DELETE"])
 def delete_stock(silono):
+    if not can_edit_stock():
+        return STOCK_DENIED
+    conn = None
     try:
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
         cursorWrite.execute('DELETE FROM "MaterialData" WHERE "SiloNo" = %s', (silono,))
@@ -1893,24 +1952,30 @@ def delete_stock(silono):
         return jsonify({"success": False, "error": str(e)})
 
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route('/api/stocks/export', methods=['POST'])
 def export_material_data():
+    conn = None
     try:
         print(" MaterialData Excel Export Requested")
 
         conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
         query = """
-            SELECT "SiloNo", "MaterialName", "MaterialCode", "OperatorName", "TotalExtracted"
+            SELECT "SiloNo", "MaterialName", "MaterialCode", "TotalExtracted",
+                   "UpdatedAt", "OperatorName"
             FROM "MaterialData"
+            ORDER BY "SiloNo"
         """
         df = pd.read_sql_query(query, conn)
 
         if df is None or df.empty:
             return jsonify({"success": False, "error": "No data available to export"}), 400
+
+        df["UpdatedAt"] = pd.to_datetime(df["UpdatedAt"], errors="coerce").dt.strftime("%d-%m-%Y %H:%M:%S")
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -1930,6 +1995,203 @@ def export_material_data():
     except Exception as e:
         print(" Export Error:", e)
         return jsonify({"success": False, "error": str(e)}), 500
+
+    finally:
+        if conn:
+            conn.close()
+
+
+# ==========================================================
+# Total Stock: material master list (name + code). The Silo Stock page
+# suggests materials from it.
+# ==========================================================
+
+@app.route('/total_stocks')
+def total_stocks():
+    return render_template('total_stocks.html', user_logged_in='username' in session,
+                           user=session.get("username"), role=session.get("role"))
+
+
+def _material_row(r):
+    return {"Id": r["Id"], "MaterialName": r["MaterialName"] or "",
+            "MaterialCode": r["MaterialCode"] or "",
+            "UpdatedAt": _fmt_time(r["UpdatedAt"]), "UpdatedBy": r["UpdatedBy"] or ""}
+
+
+@app.route("/api/materials", methods=["GET"])
+def get_materials():
+    """All materials, or those whose name or code contains ?q= (any case)."""
+    conn = None
+    try:
+        q = (request.args.get("q") or "").strip()
+        conn, cur, _ = sqliteCon.get_db_connection()
+        cur.execute('''
+            SELECT "Id", "MaterialName", "MaterialCode", "UpdatedAt", "UpdatedBy"
+            FROM "MaterialMaster"
+            WHERE %s = '' OR "MaterialName" ILIKE %s OR COALESCE("MaterialCode", '') ILIKE %s
+            ORDER BY LOWER("MaterialName")
+        ''', (q, f"%{q}%", f"%{q}%"))
+        return jsonify({"success": True, "records": [_material_row(r) for r in cur.fetchall()]})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+    finally:
+        if conn:
+            conn.close()
+
+
+def _material_input(data):
+    name = str((data or {}).get("MaterialName") or "").strip()
+    code = str((data or {}).get("MaterialCode") or "").strip()
+    return name, code or None
+
+
+@app.route("/api/materials/add", methods=["POST"])
+def add_material():
+    if not can_edit_stock():
+        return STOCK_DENIED
+    name, code = _material_input(request.get_json(silent=True))
+    if not name:
+        return jsonify({"success": False, "error": "Material Name is required"})
+    conn = None
+    try:
+        conn, cur, _ = sqliteCon.get_db_connection()
+        cur.execute('SELECT 1 FROM "MaterialMaster" WHERE LOWER(TRIM("MaterialName")) = LOWER(%s)', (name,))
+        if cur.fetchone():
+            return jsonify({"success": False, "error": f"Material '{name}' already exists."})
+        cur.execute('INSERT INTO "MaterialMaster" ("MaterialName", "MaterialCode", "UpdatedAt", "UpdatedBy") '
+                    'VALUES (%s, %s, now(), %s)', (name, code, session.get("username")))
+        conn.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.route("/api/materials/update/<int:material_id>", methods=["PUT"])
+def update_material(material_id):
+    if not can_edit_stock():
+        return STOCK_DENIED
+    name, code = _material_input(request.get_json(silent=True))
+    if not name:
+        return jsonify({"success": False, "error": "Material Name is required"})
+    conn = None
+    try:
+        conn, cur, _ = sqliteCon.get_db_connection()
+        cur.execute('SELECT 1 FROM "MaterialMaster" WHERE LOWER(TRIM("MaterialName")) = LOWER(%s) '
+                    'AND "Id" <> %s', (name, material_id))
+        if cur.fetchone():
+            return jsonify({"success": False, "error": f"Material '{name}' already exists."})
+        cur.execute('UPDATE "MaterialMaster" SET "MaterialName" = %s, "MaterialCode" = %s, '
+                    '"UpdatedAt" = now(), "UpdatedBy" = %s WHERE "Id" = %s',
+                    (name, code, session.get("username"), material_id))
+        if cur.rowcount == 0:
+            return jsonify({"success": False, "error": "Material not found."})
+        conn.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.route("/api/materials/delete/<int:material_id>", methods=["DELETE"])
+def delete_material(material_id):
+    if not can_edit_stock():
+        return STOCK_DENIED
+    conn = None
+    try:
+        conn, cur, _ = sqliteCon.get_db_connection()
+        cur.execute('DELETE FROM "MaterialMaster" WHERE "Id" = %s', (material_id,))
+        conn.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.route("/api/materials/import", methods=["POST"])
+def import_materials():
+    """Excel with columns MaterialName, MaterialCode. A name already in the list
+    gets the code from the file; new names are added. Nothing is deleted."""
+    if not can_edit_stock():
+        return STOCK_DENIED
+    file = request.files.get("file")
+    if file is None or not file.filename.lower().endswith(".xlsx"):
+        return jsonify({"success": False, "error": "Choose an .xlsx file"}), 400
+    conn = None
+    try:
+        df = pd.read_excel(file, dtype=str)
+        # Accept "MaterialName", "Material Name", "material name", ...
+        df.columns = [str(c).replace(" ", "").strip().lower() for c in df.columns]
+        if "materialname" not in df.columns:
+            return jsonify({"success": False, "error": "Missing column: MaterialName"}), 400
+        if "materialcode" not in df.columns:
+            df["materialcode"] = None
+
+        rows = {}
+        for name, code in zip(df["materialname"], df["materialcode"]):
+            name = "" if pd.isna(name) else str(name).strip()
+            code = None if pd.isna(code) or not str(code).strip() else str(code).strip()
+            if name:
+                rows[name.lower()] = (name, code)   # last one wins inside the file
+        if not rows:
+            return jsonify({"success": False, "error": "No material names found in the file"}), 400
+
+        user = session.get("username")
+        conn, cur, _ = sqliteCon.get_db_connection()
+        added = updated = 0
+        with conn:
+            for name, code in rows.values():
+                cur.execute('SELECT "MaterialCode" FROM "MaterialMaster" '
+                            'WHERE LOWER(TRIM("MaterialName")) = LOWER(%s)', (name,))
+                existing = cur.fetchone()
+                if existing is None:
+                    cur.execute('INSERT INTO "MaterialMaster" ("MaterialName", "MaterialCode", '
+                                '"UpdatedAt", "UpdatedBy") VALUES (%s, %s, now(), %s)', (name, code, user))
+                    added += 1
+                elif (existing[0] or None) != code:
+                    cur.execute('UPDATE "MaterialMaster" SET "MaterialCode" = %s, "UpdatedAt" = now(), '
+                                '"UpdatedBy" = %s WHERE LOWER(TRIM("MaterialName")) = LOWER(%s)',
+                                (code, user, name))
+                    updated += 1
+        return jsonify({"success": True, "added": added, "updated": updated})
+    except Exception as e:
+        print(" Material import error:", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.route("/api/materials/export", methods=["POST"])
+def export_materials():
+    conn = None
+    try:
+        conn, cur, _ = sqliteCon.get_db_connection()
+        cur.execute('SELECT "MaterialName", "MaterialCode", "UpdatedAt", "UpdatedBy" '
+                    'FROM "MaterialMaster" ORDER BY LOWER("MaterialName")')
+        rows = cur.fetchall()
+        # Same column names the import reads, so the file can be edited and imported back
+        df = pd.DataFrame([{"MaterialName": r["MaterialName"], "MaterialCode": r["MaterialCode"] or "",
+                            "UpdatedAt": _fmt_time(r["UpdatedAt"]), "UpdatedBy": r["UpdatedBy"] or ""}
+                           for r in rows], columns=["MaterialName", "MaterialCode", "UpdatedAt", "UpdatedBy"])
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='Materials')
+        output.seek(0)
+        return send_file(output, as_attachment=True,
+                         download_name=f"SKEW_TotalStock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.route('/about')

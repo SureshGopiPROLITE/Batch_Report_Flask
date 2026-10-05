@@ -75,6 +75,37 @@ def ensure_indexes():
         'ALTER TABLE "recipeData" ADD COLUMN IF NOT EXISTS "Seq" integer',
         # Shift of each batch (Settings shift times + batch start time)
         'ALTER TABLE "Batches" ADD COLUMN IF NOT EXISTS "Shift" text',
+        # Silo Stock page: when a silo row was last changed (assign / edit /
+        # reset weight); "OperatorName" holds who did it
+        'ALTER TABLE "MaterialData" ADD COLUMN IF NOT EXISTS "UpdatedAt" timestamp',
+        # A pre-release build kept "who" twice (OperatorName + UpdatedBy):
+        # keep the newer name in OperatorName and drop the duplicate column
+        """DO $$ BEGIN
+               IF EXISTS (SELECT 1 FROM information_schema.columns
+                          WHERE table_name = 'MaterialData' AND column_name = 'UpdatedBy') THEN
+                   UPDATE "MaterialData" SET "OperatorName" = "UpdatedBy"
+                   WHERE "UpdatedBy" IS NOT NULL;
+                   ALTER TABLE "MaterialData" DROP COLUMN "UpdatedBy";
+               END IF;
+           END $$""",
+        # Total Stock page: the material master list the Silo Stock page
+        # suggests from. Names are unique ignoring case / outer spaces.
+        """CREATE TABLE IF NOT EXISTS "MaterialMaster" (
+               "Id" serial PRIMARY KEY,
+               "MaterialName" text NOT NULL,
+               "MaterialCode" text,
+               "UpdatedAt" timestamp,
+               "UpdatedBy" text)""",
+        """CREATE UNIQUE INDEX IF NOT EXISTS ux_materialmaster_name
+           ON "MaterialMaster" (LOWER(TRIM("MaterialName")))""",
+        # First start: fill the list with the materials already in the silos
+        """INSERT INTO "MaterialMaster" ("MaterialName", "MaterialCode", "UpdatedAt", "UpdatedBy")
+           SELECT DISTINCT ON (LOWER(TRIM("MaterialName"))) TRIM("MaterialName"),
+                  NULLIF(TRIM("MaterialCode"), ''), now(), 'system'
+           FROM "MaterialData"
+           WHERE NULLIF(TRIM("MaterialName"), '') IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM "MaterialMaster")
+           ORDER BY LOWER(TRIM("MaterialName"))""",
         # Material still falling after the feeder stops (kg); written to the
         # PLC tag Recipe_Data[silo].InflightWeight
         'ALTER TABLE "recipeData" ADD COLUMN IF NOT EXISTS "InflightWeight" double precision DEFAULT 0',

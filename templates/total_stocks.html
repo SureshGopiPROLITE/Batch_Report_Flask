@@ -1,0 +1,245 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="inv-navbar">
+  <div class="inv-navbar-left">
+    <span class="inv-app-title">Total Stock</span>
+  </div>
+
+  <div class="inv-navbar-right">
+    <button class="add-btn" id="addRowBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Add</button>
+    <button class="add-btn" id="importBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% else %} title="Excel (.xlsx) with columns MaterialName, MaterialCode" {% endif %}>Import</button>
+    <button class="add-btn" id="exportBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Export</button>
+    <input type="file" id="importFile" accept=".xlsx" hidden>
+    <input class="search-input" type="text" id="searchBox" placeholder="Search name or code...">
+  </div>
+</div>
+
+<!-- TABLE -->
+<div class="stocks-table-wrapper">
+  <table class="stocks-table">
+    <thead>
+      <tr>
+        <th>S.No</th>
+        <th class="sortable" data-col="1">Material Name</th>
+        <th class="sortable" data-col="2">Material Code</th>
+        <th class="sortable" data-col="3">Updated Time</th>
+        <th class="sortable" data-col="4">Updated By</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+
+    <tbody id="materialsTableBody">
+      <tr><td colspan="6" class="table-error">Loading data...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+
+  const tableBody = document.getElementById("materialsTableBody");
+  const addRowBtn = document.getElementById("addRowBtn");
+  const importBtn = document.getElementById("importBtn");
+  const importFile = document.getElementById("importFile");
+  const exportBtn = document.getElementById("exportBtn");
+  const searchBox = document.getElementById("searchBox");
+  const denied = {{ 'false' if user_logged_in and role != 'operator' else 'true' }}
+    ? 'disabled title="Access Denied"' : "";
+
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  /* =========================================================
+       SORTING
+  ========================================================= */
+  let sortState = {};
+  const timeKey = (t) => t.replace(/^(\d{2})-(\d{2})-(\d{4})/, "$3$2$1");
+
+  document.querySelectorAll("th.sortable").forEach((th) => {
+    const col = Number(th.dataset.col);
+    th.addEventListener("click", () => {
+      const rows = Array.from(tableBody.querySelectorAll("tr[data-id]"));
+      sortState[col] = sortState[col] === "asc" ? "desc" : "asc";
+      const dir = sortState[col] === "asc" ? 1 : -1;
+      rows.sort((a, b) => {
+        let x = a.children[col].innerText.trim().toLowerCase();
+        let y = b.children[col].innerText.trim().toLowerCase();
+        if (col === 3) { x = timeKey(x); y = timeKey(y); }
+        return x > y ? dir : x < y ? -dir : 0;
+      });
+      rows.forEach((r, i) => { r.children[0].innerText = i + 1; tableBody.appendChild(r); });
+    });
+  });
+
+  /* =========================================================
+       LOAD
+  ========================================================= */
+  async function loadMaterials() {
+    const res = await fetch("/api/materials");
+    const data = await res.json();
+
+    tableBody.innerHTML = "";
+    if (!data.success || data.records.length === 0) {
+      tableBody.innerHTML = `<tr><td colspan="6" class="table-error">${
+        data.success ? "No materials yet - use Add or Import" : esc(data.error)}</td></tr>`;
+      return;
+    }
+
+    data.records.forEach((m, i) => {
+      const tr = document.createElement("tr");
+      tr.dataset.id = m.Id;
+      tr.innerHTML = `
+        <td>${i + 1}</td>
+        <td>${esc(m.MaterialName)}</td>
+        <td>${esc(m.MaterialCode)}</td>
+        <td>${esc(m.UpdatedAt)}</td>
+        <td>${esc(m.UpdatedBy)}</td>
+        <td class="action-cell">
+          <button class="table-action-btn edit-btn" title="Edit" ${denied}><i class='bx bx-edit'></i></button>
+          <button class="table-action-btn delete-btn" title="Delete" ${denied}><i class='bx bx-trash'></i></button>
+        </td>
+      `;
+      tableBody.appendChild(tr);
+    });
+    applySearch();
+  }
+
+  async function send(url, method, body) {
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    return res.json();
+  }
+
+  /* =========================================================
+       ADD
+  ========================================================= */
+  addRowBtn.addEventListener("click", () => {
+    if (document.querySelector(".new-row")) return;
+
+    const tr = document.createElement("tr");
+    tr.classList.add("new-row");
+    tr.innerHTML = `
+      <td></td>
+      <td><input type="text" class="edit-input in-name" placeholder="Material Name"></td>
+      <td><input type="text" class="edit-input in-code" placeholder="Material Code"></td>
+      <td><input type="text" class="edit-input" disabled></td>
+      <td><input type="text" class="edit-input" value="{{ user or '' }}" disabled></td>
+      <td>
+        <button class="table-action-btn save-new-btn"><i class='bx bx-check'></i></button>
+        <button class="table-action-btn cancel-new-btn"><i class='bx bx-x'></i></button>
+      </td>
+    `;
+    tableBody.prepend(tr);
+    tr.querySelector(".in-name").focus();
+
+    tr.querySelector(".cancel-new-btn").onclick = () => tr.remove();
+    tr.querySelector(".save-new-btn").onclick = async () => {
+      const body = {
+        MaterialName: tr.querySelector(".in-name").value.trim(),
+        MaterialCode: tr.querySelector(".in-code").value.trim()
+      };
+      if (!body.MaterialName) { alert("Material Name is required"); return; }
+      const result = await send("/api/materials/add", "POST", body);
+      if (result.success) loadMaterials();
+      else alert(result.error);
+    };
+  });
+
+  /* =========================================================
+       EDIT / DELETE
+  ========================================================= */
+  tableBody.addEventListener("click", async (e) => {
+    const editBtn = e.target.closest(".edit-btn");
+    if (editBtn) {
+      const row = editBtn.closest("tr");
+      if (row.classList.contains("editing")) return;
+      row.classList.add("editing");
+
+      const cols = row.querySelectorAll("td");
+      cols[1].innerHTML = `<input class="edit-input in-name" value="${esc(cols[1].innerText.trim())}">`;
+      cols[2].innerHTML = `<input class="edit-input in-code" value="${esc(cols[2].innerText.trim())}">`;
+      cols[5].innerHTML = `
+        <button class="table-action-btn save-btn"><i class='bx bx-check'></i></button>
+        <button class="table-action-btn cancel-btn"><i class='bx bx-x'></i></button>
+      `;
+      cols[5].querySelector(".cancel-btn").onclick = () => loadMaterials();
+      cols[5].querySelector(".save-btn").onclick = async () => {
+        const body = {
+          MaterialName: row.querySelector(".in-name").value.trim(),
+          MaterialCode: row.querySelector(".in-code").value.trim()
+        };
+        if (!body.MaterialName) { alert("Material Name is required"); return; }
+        const result = await send(`/api/materials/update/${row.dataset.id}`, "PUT", body);
+        if (result.success) loadMaterials();
+        else alert(result.error);
+      };
+      return;
+    }
+
+    const deleteBtn = e.target.closest(".delete-btn");
+    if (deleteBtn) {
+      const row = deleteBtn.closest("tr");
+      const name = row.children[1].innerText.trim();
+      if (!confirm(`Delete material "${name}" from the Total Stock list?\n\n` +
+                   `Silos that already use it are not changed.`)) return;
+      const result = await send(`/api/materials/delete/${row.dataset.id}`, "DELETE");
+      if (result.success) loadMaterials();
+      else alert(result.error);
+    }
+  });
+
+  /* =========================================================
+       SEARCH - name or code containing the text
+  ========================================================= */
+  function applySearch() {
+    const q = searchBox.value.trim().toLowerCase();
+    tableBody.querySelectorAll("tr[data-id]").forEach((row) => {
+      const text = (row.children[1].innerText + " " + row.children[2].innerText).toLowerCase();
+      row.style.display = text.includes(q) ? "" : "none";
+    });
+  }
+  searchBox.addEventListener("input", applySearch);
+
+  /* =========================================================
+       IMPORT / EXPORT EXCEL
+  ========================================================= */
+  importBtn.addEventListener("click", () => importFile.click());
+
+  importFile.addEventListener("change", async () => {
+    const file = importFile.files[0];
+    importFile.value = "";
+    if (!file) return;
+
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/materials/import", { method: "POST", body: form });
+    const result = await res.json();
+    if (result.success) {
+      alert(`Import done: ${result.added} added, ${result.updated} updated.`);
+      loadMaterials();
+    } else {
+      alert("Import failed: " + result.error);
+    }
+  });
+
+  exportBtn.addEventListener("click", async () => {
+    const res = await fetch("/api/materials/export", { method: "POST" });
+    if (!res.ok) { alert("Export failed"); return; }
+    const blob = await res.blob();
+    const stamp = new Date().toISOString().slice(0, 16).replace("T", "_").replace(/:/g, "-");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `SKEW_TotalStock_${stamp}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  loadMaterials();
+});
+</script>
+
+{% endblock %}
