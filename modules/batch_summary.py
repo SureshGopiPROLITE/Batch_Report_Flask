@@ -36,6 +36,26 @@ def clean_plc_datetime(date_string):
 
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
+SILO_START_NAME = "StartTime"
+SILO_END_NAME = "EndTime"
+
+
+def silo_time_range(df):
+    """(start, end) of a batch from its silos: earliest StartTime and latest
+    EndTime as 'YYYY-MM-DD HH:MM:SS', None where no silo has a valid time.
+    Used when the PLC sends no header Start/End Date Time tags."""
+    silos = df[~df["Category"].isin(["Info", "Summary"])]
+
+    def times(name):
+        values = silos.loc[silos["Name"] == name, "Value"].map(clean_plc_datetime)
+        return pd.to_datetime(values, errors="coerce").dropna()
+
+    starts, ends = times(SILO_START_NAME), times(SILO_END_NAME)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return (starts.min().strftime(fmt) if not starts.empty else None,
+            ends.max().strftime(fmt) if not ends.empty else None)
+
+
 def batch_summary_rows(dfPlcdb):
     """plc_data rows (TimeStamp, Name, DataType, Value, Category, BatchNo,
     DailyBatchNo) for the batch summary; [] if the PLC dates are unusable."""
@@ -51,17 +71,16 @@ def batch_summary_rows(dfPlcdb):
     actual_total = float(df.loc[df["Name"] == "ActualWeight", "Value_num"].sum())
     set_total = float(df.loc[df["Name"] == "SetWeight", "Value_num"].sum())
 
-    start_rows = df.loc[df["Name"] == START_NAME, "Value"]
-    end_rows = df.loc[df["Name"] == END_NAME, "Value"]
-    if start_rows.empty or end_rows.empty:
-        print(" Start/End Date Time tags missing - summary skipped")
-        return []
+    # Header Start/End Date Time tags; batches without them use the silo times
+    def header(name):
+        rows = df.loc[df["Name"] == name, "Value"]
+        return clean_plc_datetime(rows.iloc[-1]) if not rows.empty else None
 
-    start = pd.to_datetime(clean_plc_datetime(start_rows.iloc[-1]), errors="coerce")
-    end = pd.to_datetime(clean_plc_datetime(end_rows.iloc[-1]), errors="coerce")
+    silo_start, silo_end = silo_time_range(df)
+    start = pd.to_datetime(header(START_NAME) or silo_start, errors="coerce")
+    end = pd.to_datetime(header(END_NAME) or silo_end, errors="coerce")
     if pd.isna(start) or pd.isna(end):
-        print(" Invalid Start/End Date Time - summary skipped")
-        return []
+        return []   # no usable start/end time (header or silo) - no summary
 
     summary = {
         "TotalBatchActualWeight": actual_total,

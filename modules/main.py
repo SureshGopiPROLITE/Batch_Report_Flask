@@ -11,7 +11,7 @@ from flask import session
 import psycopg2
 from psycopg2 import sql
 import pandas as pd
-from modules.batch_summary import calculate_batch_summary, clean_plc_datetime
+from modules.batch_summary import calculate_batch_summary, clean_plc_datetime, silo_time_range
 from modules import shift
 
 # === Logging Setup ===
@@ -53,7 +53,7 @@ def df_split(dfPlcdb):
 
 
 
-BATCH_EXTRA_NAMES = ("Mixer Selected", "Shift", "Start Date Time",
+BATCH_EXTRA_NAMES = ("Mixer Selected", "Shift", "Start Date Time", "StartTime",
                      "TotalBatchSetWeight", "TotalBatchActualWeight", "SetWeight", "ActualWeight")
 
 
@@ -87,6 +87,10 @@ def batch_extras(batch_nos, logged_at=None):
         index="BatchNo", columns="Name", values="Num", aggfunc="last")
     silos = rows[~rows["Category"].isin(["Info", "Summary"])].pivot_table(
         index="BatchNo", columns="Name", values="Num", aggfunc="sum")
+    # Batches without a header start time: their earliest silo StartTime
+    silo_rows = rows[~rows["Category"].isin(["Info", "Summary"]) & (rows["Name"] == "StartTime")]
+    silo_start = (pd.to_datetime(silo_rows["Value"].map(clean_plc_datetime), errors="coerce")
+                  .groupby(silo_rows["BatchNo"]).min())
     for frame, names in ((info, ("Mixer Selected", "Shift", "Start Date Time")),
                          (summary, ("TotalBatchSetWeight", "TotalBatchActualWeight")),
                          (silos, ("SetWeight", "ActualWeight"))):
@@ -103,12 +107,120 @@ def batch_extras(batch_nos, logged_at=None):
     mixer = out["Mixer Selected"].astype(str).str.strip()
     out["Mixer No"] = mixer.where(~mixer.isin(["None", "nan", "<NA>"]), "")
     out["Shift"] = [
-        shift.for_batch({"Shift": sh, "Start Date Time": st}, shifts, logged_at.get(b))
+        shift.for_batch({"Shift": sh, "Start Date Time": st if shift.parse_time(st) else silo_start.get(b)},
+                        shifts, logged_at.get(b))
         for b, sh, st in zip(out["BatchNo"], out["Shift"], out["Start Date Time"])
     ]
     out["Total Set Weight(Kg)"] = set_total.fillna(0).round(2)
     out["Total Actual Weight(Kg)"] = act_total.fillna(0).round(2)
     return out[cols]
+
+
+def backfill_batch_shifts(chunk=2000):
+    """Saves the shift of every batch that has none yet (batches logged before
+    shifts were stored): a plc_data Info "Shift" row and "Batches"."Shift".
+    Same rule as the reports: the PLC's Shift tag, else the batch start time
+    (header tag or earliest silo StartTime), else the logged time.
+    Returns the number of batches updated."""
+    from psycopg2.extras import execute_values
+
+    conn, cur, _ = sqliteCon.get_db_connection()
+    try:
+        cur.execute('SELECT "BatchNo", MIN("TimeStamp") FROM "Batches" '
+                    'WHERE COALESCE("Shift", %s) = %s GROUP BY "BatchNo"', ("", ""))
+        missing = {int(b): ts for b, ts in cur.fetchall() if b is not None}
+    finally:
+        conn.close()
+
+    updated = 0
+    batch_nos = sorted(missing)
+    for i in range(0, len(batch_nos), chunk):
+        part = batch_nos[i:i + chunk]
+        extras = batch_extras(part, {b: missing[b] for b in part})
+        values = [(int(b), str(sh)) for b, sh in zip(extras["BatchNo"], extras["Shift"])
+                  if str(sh or "").strip()]
+        if not values:
+            continue
+        conn, cur, _ = sqliteCon.get_db_connection()
+        try:
+            with conn:
+                execute_values(cur, '''
+                    WITH v("BatchNo", "Shift") AS (VALUES %s)
+                    INSERT INTO plc_data ("TimeStamp", "Name", "DataType", "Value",
+                                          "Category", "BatchNo", "DailyBatchNo")
+                    SELECT MIN(p."TimeStamp"), 'Shift', 'STRING', v."Shift", 'Info',
+                           v."BatchNo", MAX(p."DailyBatchNo")
+                    FROM v JOIN plc_data p ON p."BatchNo" = v."BatchNo"
+                    WHERE NOT EXISTS (SELECT 1 FROM plc_data s WHERE s."BatchNo" = v."BatchNo"
+                                      AND s."Category" = 'Info' AND s."Name" = 'Shift')
+                    GROUP BY v."BatchNo", v."Shift"
+                ''', values, page_size=len(values))
+                execute_values(cur, '''
+                    UPDATE "Batches" b SET "Shift" = v."Shift"
+                    FROM (VALUES %s) AS v("BatchNo", "Shift")
+                    WHERE b."BatchNo" = v."BatchNo"
+                ''', values, page_size=len(values))
+        finally:
+            conn.close()
+        updated += len(values)
+    return updated
+
+
+def backfill_batch_summaries(chunk=1000):
+    """Adds the Summary rows (totals, accuracy, batch time) to batches that have
+    none - they were skipped while the PLC sent no header Start/End Date Time.
+    Returns the number of batches updated."""
+    from modules.batch_summary import batch_summary_rows
+
+    conn, cur, _ = sqliteCon.get_db_connection()
+    try:
+        cur.execute('''
+            SELECT DISTINCT p."BatchNo" FROM plc_data p
+            WHERE p."BatchNo" IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM plc_data s WHERE s."BatchNo" = p."BatchNo" AND s."Category" = %s)
+            ORDER BY 1''', ("Summary",))
+        batch_nos = [int(r[0]) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+    updated = 0
+    for i in range(0, len(batch_nos), chunk):
+        part = batch_nos[i:i + chunk]
+        conn, cur, _ = sqliteCon.get_db_connection()
+        try:
+            cur.execute('SELECT "Name", "Value", "Category", "BatchNo", "DailyBatchNo" '
+                        'FROM plc_data WHERE "BatchNo" = ANY(%s)', (part,))
+            rows = pd.DataFrame(cur.fetchall(),
+                                columns=["Name", "Value", "Category", "BatchNo", "DailyBatchNo"])
+            values = []
+            for _, df in rows.groupby("BatchNo"):
+                values += batch_summary_rows(df.assign(DailyBatchNo=pd.to_numeric(
+                    df["DailyBatchNo"], errors="coerce").fillna(0)))
+            if values:
+                with conn:
+                    cur.executemany(
+                        'INSERT INTO plc_data ("TimeStamp", "Name", "DataType", "Value", '
+                        '"Category", "BatchNo", "DailyBatchNo") VALUES (%s, %s, %s, %s, %s, %s, %s)',
+                        values)
+                updated += len({v[5] for v in values})
+        finally:
+            conn.close()
+    return updated
+
+
+def start_shift_backfill():
+    """Runs the shift and summary backfills in the background at app start."""
+    import threading
+
+    def run():
+        for label, job in (("Shift", backfill_batch_shifts), ("Summary", backfill_batch_summaries)):
+            try:
+                n = job()
+                if n:
+                    logging.info(f"{label} saved for {n} older batches")
+            except Exception:
+                logging.exception(f"Could not save the {label.lower()} of older batches")
+    threading.Thread(target=run, daemon=True).start()
 
 
 def data_process(hours, from_time, to_time):
@@ -149,12 +261,12 @@ def data_process(hours, from_time, to_time):
         df = df[existing_columns].copy()
 
         # -------------------------
-        # Convert Timestamp to IST
+        # TimeStamp is saved in local time already (datetime.now() under the
+        # TZ set in docker-compose) - format only, no timezone conversion
         # -------------------------
         if "TimeStamp" in df.columns:
             df["TimeStamp"] = (
-                pd.to_datetime(df["TimeStamp"], utc=True)
-                .dt.tz_convert("Asia/Kolkata")
+                pd.to_datetime(df["TimeStamp"], errors="coerce")
                 .dt.strftime("%Y-%m-%d %H:%M:%S")
             )
 
@@ -264,6 +376,7 @@ def plc_data_process(batch_no):
         numeric_columns = [
             "SetWeight",
             "ActualWeight",
+            "InflightWeight",
             "Tolerance",
             "CoarseSpeed",
             "FineSpeed",
@@ -480,6 +593,7 @@ def report_data_process(batch_no):
             "ActualWeight",
             "Difference",
             "Tolerance",
+            "InflightWeight",
             "CoarseSpeed",
             "FineSpeed",
             "StartTime",
@@ -488,7 +602,8 @@ def report_data_process(batch_no):
         ]
 
         df_pivot = add_material_times(df_pivot)
-        df_pivot = df_pivot[column_order]
+        # Batches logged before a tag existed (e.g. InflightWeight) get empty cells
+        df_pivot = df_pivot.reindex(columns=column_order)
 
         if "SiloNo" in df_pivot.columns:
             df_pivot["SiloNo"] = (
@@ -496,6 +611,16 @@ def report_data_process(batch_no):
                 .fillna(0)
                 .astype(int)
             )
+
+        # Batches saved without header Start/End Date Time: use the silo times
+        silo_start, silo_end = silo_time_range(df)
+        have = {} if df_string.empty else dict(zip(df_string["Name"], df_string["Value"]))
+        extra = [{"Name": name, "Value": value, "Category": "Info", "BatchNo": batch_no}
+                 for name, value in (("Start Date Time", silo_start), ("End Date Time", silo_end))
+                 if value is not None and clean_plc_datetime(have.get(name)) is None]
+        if extra:
+            df_string = df_string[~df_string["Name"].isin([e["Name"] for e in extra])]
+            df_string = pd.concat([df_string, pd.DataFrame(extra)], ignore_index=True)
 
         # Shift for popup / PDF / Excel: the PLC's Shift tag if it sends one,
         # otherwise from the batch start time and the Settings shift times
@@ -701,20 +826,34 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
         # ---------------------- SUMMARY -----------------------
         
         
-        df_prod = df_plc[df_plc["Name"] == "TotalBatchActualWeight"]
-        prod_values = pd.to_numeric(df_prod["Value"], errors="coerce")
-        total_production_tons = round(prod_values.sum() / 1000.0, 2) if not df_prod.empty else 0.0
+        # Production: the batches logged in the range (same source and total as
+        # the Report page), one row per batch
+        batches_once = df_batches.drop_duplicates(subset="BatchNo")
+        total_production_tons = round(
+            pd.to_numeric(batches_once["Total Batch Weight"], errors="coerce").sum() / 1000.0, 2)
 
-        number_of_batches = int(df_batches["BatchNo"].nunique()) if "BatchNo" in df_batches.columns else 0
+        number_of_batches = int(batches_once["BatchNo"].nunique())
 
         elapsed_hours = time_diff_hours if time_diff_hours > 0 else 1.0
         tph = round(total_production_tons / elapsed_hours, 2)
 
-        df_acc = df_plc[df_plc["Name"] == "BatchAccuracy"]
-        batch_accuracy = round(pd.to_numeric(df_acc["Value"], errors="coerce").mean(), 2) if not df_acc.empty else 0.0
+        # Accuracy / cycle time of those same batches. Summary rows carry the
+        # PLC end time, so select them by batch number, not by their timestamp.
+        cursorRead.execute(
+            'SELECT "BatchNo", "Name", "Value" FROM plc_data WHERE "Category" = %s '
+            'AND "Name" IN (%s, %s) AND "BatchNo" = ANY(%s)',
+            ("Summary", "BatchAccuracy", "BatchTimeMinutes",
+             [int(b) for b in batches_once["BatchNo"].dropna()]))
+        df_summary = pd.DataFrame(cursorRead.fetchall(), columns=["BatchNo", "Name", "Value"])
+        df_summary["Value"] = pd.to_numeric(df_summary["Value"], errors="coerce")
+        df_summary = df_summary.drop_duplicates(subset=["BatchNo", "Name"], keep="last")
 
-        df_cycle = df_plc[df_plc["Name"] == "BatchTimeMinutes"]
-        avg_cycle_time = round(pd.to_numeric(df_cycle["Value"], errors="coerce").mean(), 2) if not df_cycle.empty else 0.0
+        def summary_mean(name):
+            value = df_summary.loc[df_summary["Name"] == name, "Value"].mean()
+            return 0.0 if pd.isna(value) else round(float(value), 2)
+
+        batch_accuracy = summary_mean("BatchAccuracy")
+        avg_cycle_time = summary_mean("BatchTimeMinutes")
 
         # --------------------- RAW MATERIAL -------------------
         df_filtered = df_plc[~df_plc["Category"].isin(["Info", "Summary"])]

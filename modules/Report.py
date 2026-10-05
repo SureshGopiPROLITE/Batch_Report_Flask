@@ -32,6 +32,11 @@ def difference(set_wg, act_wg):
     return round(act_wg - set_wg, 2)
 
 
+def _blank(value):
+    """Empty cell instead of 'nan'/'None' (e.g. batches logged before a tag existed)."""
+    return "" if value is None or (isinstance(value, float) and pd.isna(value)) else value
+
+
 _logo_cache = {}
 LOGO_MAX_HEIGHT = 300   # px - plenty for the report header, at print resolution
 
@@ -211,7 +216,8 @@ def _fill_excel_sheet(ws, df_pivot, details, include_speed=True):
         "Set Weight",
         "Actual Weight",
         "Difference",
-        "Tolerance"
+        "Tolerance",
+        "Inflight Weight"
     ]
 
     # Add speed columns only when enabled
@@ -259,7 +265,8 @@ def _fill_excel_sheet(ws, df_pivot, details, include_speed=True):
         row.get("SetWeight",""),
         row.get("ActualWeight",""),
         row.get("Difference",""),
-        row.get("Tolerance","")
+        row.get("Tolerance",""),
+        _blank(row.get("InflightWeight"))
         ]
 
         # Add speed values only when enabled
@@ -352,6 +359,7 @@ def generate_html_report(
             <td>{row["ActualWeight"]}</td>
             <td>{row["Difference"]}</td>
             <td>{row["Tolerance"]}</td>
+            <td>{_blank(row.get("InflightWeight"))}</td>
         """
 
         # Add speed columns only when enabled
@@ -519,6 +527,7 @@ def generate_html_report(
                 <th>Actual Weight (Kg)</th>
                 <th>Difference (Kg)</th>
                 <th>Tolerance (Kg)</th>
+                <th>Inflight Weight (Kg)</th>
                 {speed_headers}
                 <th>Start Time</th>
                 <th>End Time</th>

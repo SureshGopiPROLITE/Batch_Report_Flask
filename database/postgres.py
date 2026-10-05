@@ -73,6 +73,8 @@ def ensure_indexes():
         'CREATE INDEX IF NOT EXISTS ix_plc_data_batchno ON plc_data ("BatchNo")',
         'CREATE INDEX IF NOT EXISTS ix_batches_timestamp ON "Batches" ("TimeStamp")',
         'ALTER TABLE "recipeData" ADD COLUMN IF NOT EXISTS "Seq" integer',
+        # Shift of each batch (Settings shift times + batch start time)
+        'ALTER TABLE "Batches" ADD COLUMN IF NOT EXISTS "Shift" text',
         # Material still falling after the feeder stops (kg); written to the
         # PLC tag Recipe_Data[silo].InflightWeight
         'ALTER TABLE "recipeData" ADD COLUMN IF NOT EXISTS "InflightWeight" double precision DEFAULT 0',

@@ -2347,6 +2347,8 @@ if __name__ == "__main__":
         postgres.ensure_indexes()
     except Exception:
         logging.exception("Could not create database indexes")
+    main.start_shift_backfill()
+
     monitor.start_auto_connect()
 
     app.run(debug=True, use_reloader=False)

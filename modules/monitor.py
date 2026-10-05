@@ -12,7 +12,8 @@ import pandas as pd
 from auth import licence
 from database import postgres
 from plc_connection import pylogix, snap7_plc
-from modules.batch_summary import batch_summary_rows
+from modules import shift
+from modules.batch_summary import batch_summary_rows, clean_plc_datetime, silo_time_range
 
 # === Logging Setup ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -595,6 +596,45 @@ def compose_datetime_tags(df):
     return pd.concat([out, extra]).sort_index().reset_index(drop=True)
 
 
+def _set_info(df, name, value):
+    """Sets the Info row `name` to value, adding the row if the tag table has none."""
+    hit = (df["Category"] == "Info") & (df["Name"] == name)
+    if hit.any():
+        df.loc[hit, "Value"] = value
+        return df
+    row = {"Timestamp": df["Timestamp"].iloc[0], "Name": name, "data_type": "STRING",
+           "Value": value, "Category": "Info",
+           "BatchNo": df["BatchNo"].iloc[0], "DailyBatchNo": df["DailyBatchNo"].iloc[0]}
+    return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+
+
+def _info(df, name):
+    hit = df.loc[(df["Category"] == "Info") & (df["Name"] == name), "Value"]
+    value = None if hit.empty else hit.iloc[0]
+    return None if value is None or str(value).strip() in ("", "N/A", "None", "nan") else value
+
+
+def add_batch_times(df):
+    """Batch Start / End Date Time: the PLC header tags when they hold a valid
+    date, otherwise the earliest silo StartTime / latest silo EndTime."""
+    silo_start, silo_end = silo_time_range(df)
+    for name, fallback in (("Start Date Time", silo_start), ("End Date Time", silo_end)):
+        if clean_plc_datetime(_info(df, name)) is None and fallback is not None:
+            df = _set_info(df, name, fallback)
+    return df
+
+
+def add_shift(df, shifts):
+    """Saves the batch's shift (from its start time and the Settings shift
+    times) so reports keep it even if the shift times change later.
+    A Shift tag sent by the PLC is kept as it is."""
+    plc_shift = _info(df, "Shift")
+    if plc_shift is not None and str(plc_shift).strip() not in ("0", "0.0"):
+        return df
+    when = shift.parse_time(_info(df, "Start Date Time")) or datetime.now()
+    return _set_info(df, "Shift", shift.name_for(when, shifts))
+
+
 def _next_batch_numbers(cur):
     """(BatchNo, DailyBatchNo). The daily counter lives in Info_db under
     'Batch_no' / 'Last_Date' and is updated in the caller's transaction."""
@@ -640,8 +680,8 @@ def _insert_batch_header(cur, df):
         '''
         INSERT INTO "Batches"
         ("BatchNo", "TimeStamp", "Plant Name", "Recipe Name",
-         "Start Date Time", "End Date Time", "Total Batch Weight")
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+         "Start Date Time", "End Date Time", "Total Batch Weight", "Shift")
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ''',
         (
             _py(df["BatchNo"].iloc[0]),
@@ -651,6 +691,7 @@ def _insert_batch_header(cur, df):
             _py(info.get("Start Date Time")),
             _py(info.get("End Date Time")),
             round(float(total), 2),
+            _py(info.get("Shift")),
         ),
     )
 
@@ -720,6 +761,9 @@ def run_logging(plc, df_tags, server):
                     ]
                     if not category_value.empty:
                         dfPlcdb = dfPlcdb[~dfPlcdb['Category'].isin(category_value)]
+
+                    dfPlcdb = add_batch_times(dfPlcdb.reset_index(drop=True))
+                    dfPlcdb = add_shift(dfPlcdb, shift.load(cur))
 
                     dfPlcdb = postgres.calculate_silo_diff(dfPlcdb)
 
