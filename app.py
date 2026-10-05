@@ -211,10 +211,69 @@ def get_material_by_silo(silo_no):
 @app.route("/api/recipes_data/get_recipes", methods=["GET"])
 def get_recipes():
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
-    cursorRead.execute("SELECT id, name FROM recipes ORDER BY id ASC")
-    data = [{"id": row[0], "name": row[1]} for row in cursorRead.fetchall()]
+    cursorRead.execute("SELECT id, name, category FROM recipes ORDER BY id ASC")
+    data = [{"id": row[0], "name": row[1], "set_name": row[2] or ""} for row in cursorRead.fetchall()]
     conn.close()
     return jsonify(data)
+
+
+# ---- Recipe sets: recipes.category groups the Recipe page list (view only;
+# download, reports and recipeData never read it) ----
+
+def _can_edit_recipes():
+    return 'username' in session and session.get('role') != 'operator'
+
+
+@app.route("/api/recipes_data/set_group", methods=["POST"])
+def set_recipe_group():
+    """Lists a recipe under a set (empty = no set)."""
+    if not _can_edit_recipes():
+        return jsonify({"success": False, "error": "Access denied"}), 403
+    data = request.get_json(silent=True) or {}
+    set_name = str(data.get("set_name") or "").strip() or None
+    conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+    try:
+        cursorWrite.execute("UPDATE recipes SET category = %s WHERE id = %s", (set_name, data.get("id")))
+        conn.commit()
+        return jsonify({"success": cursorWrite.rowcount > 0})
+    finally:
+        conn.close()
+
+
+@app.route("/api/recipes_data/rename_set", methods=["POST"])
+def rename_recipe_set():
+    """Renames a set; renaming onto an existing set merges the two."""
+    if not _can_edit_recipes():
+        return jsonify({"success": False, "error": "Access denied"}), 403
+    data = request.get_json(silent=True) or {}
+    old = str(data.get("old") or "").strip()
+    new = str(data.get("new") or "").strip()
+    if not old or not new:
+        return jsonify({"success": False, "error": "Set name required"})
+    conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+    try:
+        cursorWrite.execute("UPDATE recipes SET category = %s WHERE category = %s", (new, old))
+        conn.commit()
+        return jsonify({"success": True, "recipes": cursorWrite.rowcount})
+    finally:
+        conn.close()
+
+
+@app.route("/api/recipes_data/delete_set", methods=["POST"])
+def delete_recipe_set():
+    """Removes a set. Its recipes are kept and listed without a set."""
+    if not _can_edit_recipes():
+        return jsonify({"success": False, "error": "Access denied"}), 403
+    name = str((request.get_json(silent=True) or {}).get("name") or "").strip()
+    if not name:
+        return jsonify({"success": False, "error": "Set name required"})
+    conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+    try:
+        cursorWrite.execute("UPDATE recipes SET category = NULL WHERE category = %s", (name,))
+        conn.commit()
+        return jsonify({"success": True, "recipes": cursorWrite.rowcount})
+    finally:
+        conn.close()
 
 
 @app.route("/api/recipes_data/add_recipe", methods=["POST"])
@@ -240,8 +299,8 @@ def add_recipe():
     try:
         #  Insert into recipes table
         cursorWrite.execute(
-            "INSERT INTO recipes (name, category) VALUES (%s, %s)",
-            (name, name)
+            "INSERT INTO recipes (name) VALUES (%s)",   # no set yet
+            (name,)
         )
         conn.commit()
         # No placeholder row: '' is not a valid number in Postgres (the insert
@@ -545,8 +604,8 @@ def import_recipe_excel():
 
         # 2 Insert recipe name
         cursorWrite.execute(
-            "INSERT INTO recipes (name, category) VALUES (%s, %s)",
-            (category, category)
+            "INSERT INTO recipes (name) VALUES (%s)",   # no set yet
+            (category,)
         )
         conn.commit()
 
@@ -2286,15 +2345,13 @@ def login():
     username = request.form["username"]
     password = request.form["password"]
 
-    user = authLog.get_user(username)
-    # user = (id, username, password_hash, role, user_access, is_active, last_login)
-    print(user)
+    user = authLog.get_user(username)   # read by column name, not position
 
-    if user and check_password_hash(user[2], password):
-        if user[5] == 1:  # active?
+    if user and check_password_hash(user["password_hash"], password):
+        if user["is_active"] == 1:  # active?
             session.permanent = True
-            session['username'] = user[1]
-            session['role'] = user[3]
+            session['username'] = user["username"]
+            session['role'] = user["role"]
             return jsonify(success=True)
 
         return jsonify(success=False, error="Your account is deactivated."), 403
@@ -2352,24 +2409,53 @@ def update_user_password():
     return jsonify(success=True)
 
 
-# ---------------------- ADMIN UPDATE USER ACCESS ----------------------------
+# ---------------------- ADMIN UPDATE USERNAME / ROLE -------------------------
+
+USER_ROLES = ("admin", "operator", "user")
+
 
 @app.route("/update_user_details", methods=["POST"])
 def update_user_details():
-    data = request.get_json()
-    username = data.get("username")
-    user_access = data.get("user_access")
+    if not is_admin():
+        return jsonify(success=False, error="Only an admin can edit users"), 403
 
-    if not username or not user_access:
-        return jsonify(success=False, error="Missing fields")
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username") or "").strip()
+    role = str(data.get("role") or "").strip()
+    try:
+        user_id = int(data.get("user_id"))
+    except (TypeError, ValueError):
+        return jsonify(success=False, error="Invalid user")
+
+    if not username:
+        return jsonify(success=False, error="Username cannot be empty")
+    if role not in USER_ROLES:
+        return jsonify(success=False, error=f"Role must be one of: {', '.join(USER_ROLES)}")
 
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
+    try:
+        cursorRead.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
+        current = cursorRead.fetchone()
+        if not current:
+            return jsonify(success=False, error="User not found")
+        if current["role"] == "superadmin":
+            return jsonify(success=False, error="The superadmin account cannot be edited here")
 
-    cursorWrite.execute("UPDATE users SET user_access=%s WHERE username=%s", (user_access, username))
-    conn.commit()
-    conn.close()
+        cursorRead.execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(%s) AND id<>%s",
+                           (username, user_id))
+        if cursorRead.fetchone():
+            return jsonify(success=False, error=f"Username '{username}' is already taken")
 
-    return jsonify(success=True)
+        cursorWrite.execute("UPDATE users SET username=%s, role=%s WHERE id=%s", (username, role, user_id))
+        conn.commit()
+
+        # Editing your own account: keep the session in step
+        if session.get("username") == current["username"]:
+            session["username"] = username
+            session["role"] = role
+        return jsonify(success=True)
+    finally:
+        conn.close()
 
 
 # ------------------------------ ADD USER -----------------------------------

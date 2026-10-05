@@ -73,8 +73,33 @@ def ensure_indexes():
         'CREATE INDEX IF NOT EXISTS ix_plc_data_batchno ON plc_data ("BatchNo")',
         'CREATE INDEX IF NOT EXISTS ix_batches_timestamp ON "Batches" ("TimeStamp")',
         'ALTER TABLE "recipeData" ADD COLUMN IF NOT EXISTS "Seq" integer',
+        # Recipe page: recipes.category is the set a recipe is listed under
+        # ("Recipe Set 1"), for display only. It used to be a copy of the name
+        # (never read) - clear those so each recipe is not its own set.
+        "UPDATE recipes SET category = NULL WHERE category = name",
+        # A pre-release build kept the set in "SetName": move it to category
+        """DO $$ BEGIN
+               IF EXISTS (SELECT 1 FROM information_schema.columns
+                          WHERE table_name = 'recipes' AND column_name = 'SetName') THEN
+                   UPDATE recipes SET category = "SetName" WHERE "SetName" IS NOT NULL;
+                   ALTER TABLE recipes DROP COLUMN "SetName";
+               END IF;
+           END $$""",
+        # recipes.id had no default: recipes added in the app got NULL
+        'CREATE SEQUENCE IF NOT EXISTS recipes_id_seq',
+        """SELECT setval('recipes_id_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM recipes), 1))""",
+        "UPDATE recipes SET id = nextval('recipes_id_seq') WHERE id IS NULL",
+        "ALTER TABLE recipes ALTER COLUMN id SET DEFAULT nextval('recipes_id_seq')",
         # Shift of each batch (Settings shift times + batch start time)
         'ALTER TABLE "Batches" ADD COLUMN IF NOT EXISTS "Shift" text',
+        # users.user_access was never used for permissions (the role is)
+        'ALTER TABLE users DROP COLUMN IF EXISTS user_access',
+        # users.id had no default, so users added in User Management got NULL
+        # and could not be edited / (de)activated. Number them like recipeData.
+        'CREATE SEQUENCE IF NOT EXISTS users_id_seq',
+        """SELECT setval('users_id_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM users), 1))""",
+        "UPDATE users SET id = nextval('users_id_seq') WHERE id IS NULL",
+        "ALTER TABLE users ALTER COLUMN id SET DEFAULT nextval('users_id_seq')",
         # Silo Stock page: when a silo row was last changed (assign / edit /
         # reset weight); "OperatorName" holds who did it
         'ALTER TABLE "MaterialData" ADD COLUMN IF NOT EXISTS "UpdatedAt" timestamp',

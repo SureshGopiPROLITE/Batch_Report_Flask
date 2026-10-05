@@ -157,9 +157,14 @@
                     if (row.classList.contains("editing")) return; 
                     row.classList.add("editing");
 
+                    const toggle = row.querySelector('.toggle-active');
+                    const userId = toggle ? toggle.dataset.userid : null;
                     const userName = row.children[1].textContent.trim();
                     const role = row.children[2].textContent.trim();
 
+                    // Username and Role are both editable
+                    row.children[1].innerHTML = `<input type="text" class="edit-input username-input">`;
+                    row.querySelector('.username-input').value = userName;
 
                     row.children[2].innerHTML = `
                         <select class="access-select">
@@ -179,17 +184,23 @@
                     const cancelBtn = row.querySelector('.cancel-edit');
 
                     saveBtn.addEventListener('click', () => {
-                        const newAccess = row.querySelector('.access-select').value;
+                        const newUsername = row.querySelector('.username-input').value.trim();
+                        const newRole = row.querySelector('.access-select').value;
+
+                        if (!newUsername) {
+                            alert("Username cannot be empty.");
+                            return;
+                        }
 
                         fetch("/update_user_details", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ username: userName, role: newAccess })
+                            body: JSON.stringify({ user_id: userId, username: newUsername, role: newRole })
                         })
                         .then(res => res.json())
                         .then(data => {
                             if (data.success) {
-                                alert("User Access updated successfully.");
+                                alert("User updated successfully.");
                                 window.location.reload();
                             } else {
                                 alert("Failed to update user: " + data.error);
@@ -359,7 +370,7 @@
                 
 
                 if (!username || !role ) {
-                    alert("Please fill username, select role and access.");
+                    alert("Please fill username and select role.");
                     return;
                 }
 

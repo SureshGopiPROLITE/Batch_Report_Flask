@@ -11,7 +11,9 @@ def get_user(username):
 
 
     # Fetch the user
-    cursorRead.execute('SELECT * FROM users WHERE username =  %s', (username,))
+    # Named columns (DictCursor): user["password_hash"], user["is_active"], ...
+    cursorRead.execute('SELECT id, username, password_hash, role, is_active, last_login '
+                       'FROM users WHERE username =  %s', (username,))
     user = cursorRead.fetchone()
 
     # Update last_login if user found

@@ -1,6 +1,25 @@
 {% extends 'base.html' %}
 {% block content %}
 <style>
+  /* Recipe sets (recipes.category) in the recipe list */
+  .tree-root li.set-node { font-weight: 600; color: #1f2d3d; }
+  .tree-root li.set-node > i { color: #f1c40f; }
+  .set-node .set-count { font-weight: 400; color: #888; }
+  .set-node .set-actions { margin-left: auto; display: inline-flex; gap: 6px; visibility: hidden; }
+  .set-node:hover .set-actions { visibility: visible; }
+  .tree-root li.set-node .set-actions i { color: #666; font-size: 1rem; }
+  .tree-root li.set-node .set-actions i.set-rename:hover { color: #007bff; }
+  .tree-root li.set-node .set-actions i.set-delete:hover { color: #dc3545; }
+  .file-node[draggable="true"] { cursor: grab; }
+  .file-node.dragging { opacity: 0.45; }
+  .tree-root li.drop-target {
+    background: #e3f0ff;
+    outline: 2px dashed #007bff;
+    outline-offset: 1px;
+    border-radius: 6px;
+  }
+</style>
+<style>
   /* Step (download order) column */
   .data-table .step-col { width: 7.5rem; }
   .data-table .step-cell { white-space: nowrap; }
@@ -93,6 +112,12 @@
           {% if not user_logged_in or role == 'operator' %} disabled-icon {% endif %}'
           title="{% if not user_logged_in or role == 'operator' %}Access Denied{% else %}Delete Recipe{% endif %}"
           id="deleteRecipe">
+      </i>
+
+      <i class='bx bx-folder-plus add-icon 
+          {% if not user_logged_in or role == 'operator' %} disabled-icon {% endif %}'
+          title="{% if not user_logged_in or role == 'operator' %}Access Denied{% else %}Move selected recipe to a set (view grouping only){% endif %}"
+          id="groupRecipe">
       </i>
 
     </div>
@@ -392,43 +417,164 @@ function renderTree(data) {
         return;
     }
 
+    const fileNode = (r) => {
+        const li = document.createElement("li");
+        li.className = "file-node";
+        li.dataset.id = r.id;
+        li.dataset.name = r.name;
+        li.dataset.set = r.set_name || "";
+        li.innerHTML = `<i class='bx bx-file'></i><span></span>`;
+        li.querySelector("span").textContent = r.name;
+        li.addEventListener("click", () => selectRecipe(r));
+        li.addEventListener("dblclick", () => renameRecipe(r));
+        if (canEditSets) {
+            // Drag onto a set folder to move it there (see setDropTarget)
+            li.draggable = true;
+            li.addEventListener("dragstart", (e) => {
+                draggedRecipe = r;
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", String(r.id));
+                li.classList.add("dragging");
+            });
+            li.addEventListener("dragend", () => {
+                draggedRecipe = null;
+                li.classList.remove("dragging");
+                document.querySelectorAll(".drop-target").forEach(n => n.classList.remove("drop-target"));
+            });
+        }
+        return li;
+    };
 
-    data.forEach(r => {
+    // Sets first ("Recipe Set 1", "Recipe Set 2", ... in natural order),
+    // then the recipes that are in no set. Grouping is for viewing only.
+    const sets = {};
+    data.filter(r => r.set_name).forEach(r => (sets[r.set_name] = sets[r.set_name] || []).push(r));
+    const names = Object.keys(sets).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
 
-        const li =
-            document.createElement("li");
+    names.forEach(name => {
+        const collapsed = collapsedSets.has(name);
+        const folder = document.createElement("li");
+        folder.className = "set-node";
+        folder.dataset.set = name;
+        folder.innerHTML = `<i class='bx ${collapsed ? "bx-folder" : "bx-folder-open"}'></i>
+                            <span></span><small class="set-count">(${sets[name].length})</small>
+                            ${canEditSets ? `<span class="set-actions">
+                              <i class='bx bx-edit set-rename' title="Rename set"></i>
+                              <i class='bx bx-trash set-delete' title="Delete set (recipes are kept)"></i>
+                            </span>` : ""}`;
+        folder.querySelector("span").textContent = name;
 
-        li.className =
-            "file-node";
+        if (canEditSets) {
+            setDropTarget(folder, name);
+            folder.querySelector(".set-rename").addEventListener("click", (e) => {
+                e.stopPropagation();
+                renameSet(name);
+            });
+            folder.querySelector(".set-delete").addEventListener("click", (e) => {
+                e.stopPropagation();
+                deleteSet(name, sets[name].length);
+            });
+        }
 
-        li.dataset.id =
-            r.id;
+        const list = document.createElement("ul");
+        list.className = "child-list set-list";
+        list.hidden = collapsed;
+        sets[name].forEach(r => list.appendChild(fileNode(r)));
 
-        li.dataset.name =
-            r.name;
+        folder.addEventListener("click", () => {
+            list.hidden = !list.hidden;
+            list.hidden ? collapsedSets.add(name) : collapsedSets.delete(name);
+            folder.querySelector("i").className = `bx ${list.hidden ? "bx-folder" : "bx-folder-open"}`;
+        });
 
-
-        li.innerHTML =
-            `<i class='bx bx-file'></i>
-             <span>${r.name}</span>`;
-
-
-        li.addEventListener(
-            "click",
-            () => selectRecipe(r)
-        );
-
-
-        li.addEventListener(
-            "dblclick",
-            () => renameRecipe(r)
-        );
-
-
-        childList.appendChild(li);
-
+        childList.appendChild(folder);
+        childList.appendChild(list);
     });
 
+    data.filter(r => !r.set_name).forEach(r => childList.appendChild(fileNode(r)));
+
+    if (searchInput.value) filterRecipes();
+
+}
+
+// Sets the user closed stay closed while the page is open
+const collapsedSets = new Set();
+const canEditSets = {{ 'true' if user_logged_in and role != 'operator' else 'false' }};
+
+async function postSet(url, body) {
+    const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    });
+    const result = await res.json();
+    if (!result.success) alert(result.error || "Request failed");
+    return result.success;
+}
+
+function keepSelection(run) {
+    const active = document.querySelector(".file-node.active");
+    const id = active ? active.dataset.id : null;
+    return run().then(async (ok) => {
+        if (!ok) return;
+        await loadRecipes();
+        const node = id && document.querySelector(`.file-node[data-id='${id}']`);
+        if (node) node.classList.add("active");
+    });
+}
+
+/* Rename a set (onto an existing name = merge the two) */
+function renameSet(oldName) {
+    const newName = (prompt(`Rename set "${oldName}" to:`, oldName) || "").trim();
+    if (!newName || newName === oldName) return;
+    const exists = Array.from(document.querySelectorAll(".set-node"))
+        .some(n => n.dataset.set === newName);
+    if (exists && !confirm(`Set "${newName}" already exists. Move all recipes of "${oldName}" into it?`)) return;
+    if (collapsedSets.delete(oldName)) collapsedSets.add(newName);
+    keepSelection(() => postSet("/api/recipes_data/rename_set", { old: oldName, new: newName }));
+}
+
+/* ---------------- DRAG A RECIPE INTO A SET ---------------- */
+let draggedRecipe = null;
+
+// el accepts dropped recipes; setName "" = take the recipe out of its set
+function setDropTarget(el, setName) {
+    el.addEventListener("dragover", (e) => {
+        if (!draggedRecipe || (draggedRecipe.set_name || "") === setName) return;
+        e.preventDefault();                 // allow the drop
+        e.dataTransfer.dropEffect = "move";
+        el.classList.add("drop-target");
+    });
+    el.addEventListener("dragleave", (e) => {
+        if (!el.contains(e.relatedTarget)) el.classList.remove("drop-target");
+    });
+    el.addEventListener("drop", (e) => {
+        e.preventDefault();
+        el.classList.remove("drop-target");
+        const r = draggedRecipe;
+        draggedRecipe = null;
+        if (!r || (r.set_name || "") === setName) return;
+        collapsedSets.delete(setName);      // show the recipe where it landed
+        keepSelection(() => postSet("/api/recipes_data/set_group", { id: r.id, set_name: setName }));
+    });
+}
+
+// The top "Recipes" folder: drop here to take a recipe out of its set
+const rootFolder = document.querySelector(".tree-root > .folder-node");
+if (canEditSets && rootFolder) {
+    rootFolder.title = "Drop a recipe here to take it out of its set";
+    setDropTarget(rootFolder, "");
+}
+
+/* Delete a set: its recipes stay, listed without a set */
+function deleteSet(name, count) {
+    if (!confirm(`Delete set "${name}"?
+
+Its ${count} recipe(s) are NOT deleted - ` +
+                 `they move out of the set and stay in the list.`)) return;
+    collapsedSets.delete(name);
+    keepSelection(() => postSet("/api/recipes_data/delete_set", { name }));
 }
 
 
@@ -1542,32 +1688,29 @@ async function deleteSelectedRecipe() {
 
 /* ---------------- SEARCH RECIPE ---------------- */
 
-searchInput.addEventListener(
-    "input",
-    () => {
+function filterRecipes() {
 
-        const q =
-            searchInput.value
-                .toLowerCase();
+    const q = searchInput.value.toLowerCase();
 
+    // A recipe matches by its name or its set name
+    document.querySelectorAll(".file-node").forEach(n => {
+        n.style.display =
+            (n.dataset.name.toLowerCase().includes(q) ||
+             (n.dataset.set || "").toLowerCase().includes(q)) ? "" : "none";
+    });
 
-        document
-            .querySelectorAll(
-                ".file-node"
-            )
-            .forEach(n => {
+    // Hide a set folder when none of its recipes match
+    document.querySelectorAll(".set-node").forEach(folder => {
+        const list = folder.nextElementSibling;
+        const any = Array.from(list.querySelectorAll(".file-node"))
+            .some(n => n.style.display !== "none");
+        folder.style.display = any ? "" : "none";
+        list.style.display = any ? "" : "none";
+        if (q && any) list.hidden = false;   // searching opens matching sets
+    });
+}
 
-                n.style.display =
-                    n.dataset.name
-                        .toLowerCase()
-                        .includes(q)
-                        ? ""
-                        : "none";
-
-            });
-
-    }
-);
+searchInput.addEventListener("input", filterRecipes);
 
 
 /* ---------------- RECIPE BUTTON EVENTS ---------------- */
@@ -1582,6 +1725,39 @@ deleteRecipeBtn.addEventListener(
     "click",
     deleteSelectedRecipe
 );
+
+
+/* ---------------- GROUP INTO A SET (view only) ---------------- */
+document.getElementById("groupRecipe").addEventListener("click", async () => {
+
+    const active = document.querySelector(".file-node.active");
+    if (!active) return alert("Select a recipe first.");
+
+    const existing = Array.from(new Set(
+        Array.from(document.querySelectorAll(".set-node")).map(n => n.dataset.set)));
+    const setName = prompt(
+        `Set for "${active.dataset.name}" (only groups the list, changes nothing else).
+` +
+        (existing.length ? `Existing sets: ${existing.join(", ")}
+` : "") +
+        `Leave empty to take it out of its set.`,
+        active.dataset.set || "");
+    if (setName === null) return;   // Cancel
+
+    const res = await fetch("/api/recipes_data/set_group", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: Number(active.dataset.id), set_name: setName.trim() })
+    });
+    const result = await res.json();
+    if (!result.success) return alert(result.error || "Could not move the recipe.");
+
+    const id = active.dataset.id;
+    await loadRecipes();
+    // keep the recipe highlighted (its table is still the one shown)
+    const node = document.querySelector(`.file-node[data-id='${id}']`);
+    if (node) node.classList.add("active");
+});
 
 
 /* =====================================================
