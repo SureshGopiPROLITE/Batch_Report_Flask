@@ -3,7 +3,7 @@
 {% block content %}
 <div class="inv-navbar">
   <div class="inv-navbar-left">
-    <span class="inv-app-title">Silo Stock</span>
+    <span class="inv-app-title">Silo Materials</span>
   </div>
 
   <div class="inv-navbar-right">
@@ -21,7 +21,7 @@
         <th class="sortable" data-col="0">Silo No</th>
         <th class="sortable" data-col="1">Raw Material Name</th>
         <th class="sortable" data-col="2">Raw Material Code</th>
-        <th class="sortable" data-col="3">Total Consumption (Kg)</th>
+        <th class="sortable" data-col="3">Total Consumption (Tons)</th>
         <th class="sortable" data-col="4">Updated Time</th>
         <th class="sortable" data-col="5">Updated By</th>
         <th>Action</th>
@@ -34,7 +34,7 @@
   </table>
 </div>
 
-<!-- Material suggestions (from the Total Stock list) -->
+<!-- Material suggestions (from the Material Catalogue list) -->
 <div id="matSuggest" class="mat-suggest" hidden></div>
 
 <style>
@@ -119,7 +119,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   /* =========================================================
        MATERIAL SUGGESTIONS
        Typing in Material Name or Code lists every material from the
-       Total Stock page whose name or code contains the text.
+       Material Catalogue page whose name or code contains the text.
   ========================================================= */
   const suggestBox = document.getElementById("matSuggest");
   // Live on <body>: inside the page content it was clipped by the scrolling area
@@ -162,7 +162,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           </div>`).join("")
       : `<div class="mat-suggest-empty">${materials.length
             ? "No material contains “" + esc(target.anchor.value.trim()) + "”"
-            : "No materials yet - add them on the Total Stock page"}</div>`;
+            : "No materials yet - add them on the Material Catalogue page"}</div>`;
     suggestBox._hits = hits;
 
     // Open below the input, or above it when there is more room there
@@ -460,7 +460,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       .replace("T", "_")   // YYYY-MM-DD_HH:MM
       .replace(/:/g, "-"); // safe filename
 
-    const filename = `SKEW_SiloStock_${currentDate}.xlsx`;
+    const filename = `SKEW_SiloMaterials_${currentDate}.xlsx`;
 
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);

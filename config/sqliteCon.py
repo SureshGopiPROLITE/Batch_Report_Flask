@@ -59,7 +59,7 @@ def dfUser():
     engine, engineConRead, engineConWrite = get_db_connection_engine()
     query = "SELECT id, username, role, is_active, last_login FROM users WHERE role != 'superadmin';"
     df = pd.read_sql_query(query, engineConRead)
-    df.columns = ['Id', 'Username', 'Role', 'Is_Active', 'LastLogin']
+    df.columns = ['Id', 'Username', 'Role', 'Active', 'Last Login']
     df = df.sort_values(by='Id', ascending=True).reset_index(drop=True)
 
     # Add UI numbering (starting from 1)

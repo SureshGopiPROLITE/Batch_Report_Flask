@@ -1651,6 +1651,10 @@ def upload_RecipeTag():
 
 @app.route('/api/backup/custom', methods=['GET'])
 def create_custom_backup_route():
+    """Database backup made with pg_dump (see modules/db_management.py).
+    No dates -> full backup (.dump); From + To -> date-range backup (.sql)."""
+    if not is_admin():
+        return jsonify({"success": False, "message": "Only an admin can create backups."}), 403
     try:
         from_date = request.args.get("from_date") or None
         to_date = request.args.get("to_date") or None
@@ -1685,16 +1689,18 @@ def create_custom_backup_route():
             "message": str(e)
         }), 400
 
-    except FileNotFoundError:
-        return jsonify({
-            "success": False,
-            "message": "Database file not found."
-        }), 404
-
-    except Exception as e:
+    except db_management.BackupError as e:
+        logging.error(f"Backup failed: {e}")
         return jsonify({
             "success": False,
             "message": str(e)
+        }), 500
+
+    except Exception as e:
+        logging.exception("Backup failed")
+        return jsonify({
+            "success": False,
+            "message": f"Backup failed: {e}"
         }), 500
 
 
@@ -1836,7 +1842,7 @@ def stocks():
     )
 
 
-#  API Route — returns live data for the Silo Stock table
+#  API Route — returns live data for the Silo Materials table
 @app.route("/api/stocks", methods=["GET"])
 def get_stocks_data():
     conn = None
@@ -2061,7 +2067,7 @@ def export_material_data():
 
 
 # ==========================================================
-# Total Stock: material master list (name + code). The Silo Stock page
+# Material Catalogue: material master list (name + code). The Silo Materials page
 # suggests materials from it.
 # ==========================================================
 
@@ -2244,7 +2250,7 @@ def export_materials():
             df.to_excel(writer, index=False, sheet_name='Materials')
         output.seek(0)
         return send_file(output, as_attachment=True,
-                         download_name=f"SKEW_TotalStock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                         download_name=f"SKEW_MaterialCatalogue_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                          mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -2324,9 +2330,9 @@ def licence_info():
 def super_admin():
     user_logged_in = 'username' in session
     df = sqliteCon.dfUser()
-    df['Is_Active'] = df.apply(
+    df['Active'] = df.apply(
         lambda row: (
-            f"<input type='checkbox' class='toggle-active' data-userid='{row['Id']}' {'checked' if row['Is_Active'] == 1 else ''} />"
+            f"<input type='checkbox' class='toggle-active' data-userid='{row['Id']}' {'checked' if row['Active'] == 1 else ''} />"
         ),
         axis=1
     )

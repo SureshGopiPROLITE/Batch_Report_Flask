@@ -1849,6 +1849,7 @@ tr.editing input:focus {
     display:grid;
     grid-template-columns:repeat(2,1fr);
     gap:24px;
+    align-items:stretch;
 }
 
 /* ===========================
@@ -1857,8 +1858,10 @@ tr.editing input:focus {
 
 .settings-card{
     background:#fff;
-    height: 390px;
-    
+    /* Height follows the content (a fixed 390px cut off Database Management);
+       the grid still makes the two cards of a row equally tall */
+    display:flex;
+    flex-direction:column;
     border:1px solid #e5e7eb;
     border-radius:12px;
     overflow:hidden;
@@ -2076,8 +2079,87 @@ button:hover{
 
 .card-actions{
     display:flex;
+    align-items:center;
     gap:12px;
     margin-top:20px;
+}
+.card-actions .set-button,
+.card-actions .secondary-btn{
+    margin-top:0;
+}
+.card-actions .push-right{
+    margin-left:auto;
+}
+
+/* ======================================================
+   DATABASE MANAGEMENT - backup options
+====================================================== */
+
+.backup-option{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:16px;
+    padding:14px 16px;
+    border:1px solid #e5e7eb;
+    border-radius:10px;
+    background:#f8fafc;
+    margin-bottom:14px;
+}
+.backup-option-range{
+    flex-direction:column;
+    align-items:stretch;
+}
+.backup-option-text strong{
+    display:block;
+    font-size:15px;
+    color:#111827;
+    margin-bottom:4px;
+}
+.backup-option-text span{
+    display:block;
+    font-size:13px;
+    color:#6b7280;
+    line-height:1.45;
+}
+.backup-option code{
+    background:#e8eef6;
+    padding:0 4px;
+    border-radius:4px;
+    font-size:12px;
+}
+.backup-option .set-button{
+    margin-top:0;
+    white-space:nowrap;
+    flex-shrink:0;
+}
+.backup-range{
+    display:flex;
+    align-items:flex-end;
+    gap:12px;
+}
+.backup-range label{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+    font-size:13px;
+    font-weight:600;
+    color:#374151;
+}
+.backup-range input{
+    height:40px;
+    background:#fff;
+}
+.backup-note{
+    margin:0;
+    font-size:12.5px;
+    color:#6b7280;
+}
+
+@media (max-width:1300px){
+    .backup-range{ flex-wrap:wrap; }
+    .backup-range .set-button{ width:100%; }
 }
 
 /* ======================================================

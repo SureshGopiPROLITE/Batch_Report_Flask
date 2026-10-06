@@ -149,8 +149,34 @@ Copy the new `batch-report-X.Y.Z-images.tar` into `C:\SKEW` and run
 
 ## 6. Backups
 
-The in-app backup (Settings) writes to the `app_backups` volume. **Also** take a
-database dump regularly and copy it **off the PC**:
+Settings → Database Management makes real PostgreSQL backups with `pg_dump`
+(included in the image). Each backup downloads in the browser. The newest 10
+are also kept in the `app_backups` volume, in `/app/Backups/Custom`.
+
+| Button | File | Contains |
+|---|---|---|
+| **Full Backup** | `PLCDB2_full_<date>.dump` | The whole database |
+| **Create Backup** (From/To) | `PLCDB2_<from>_to_<to>_<date>.sql` | Batches logged in the range, plus all recipes, users and settings |
+
+**Restoring replaces the database.** Take a fresh Full Backup first, then
+stop the web container so it does not log batches during the restore:
+
+```powershell
+docker compose stop web
+# Full backup (.dump)
+docker cp PLCDB2_full_2026-10-05_18-17-05.dump batch_report_db:/tmp/restore.dump
+docker exec batch_report_db pg_restore -U postgres -d PLCDB2 --clean --if-exists --no-owner /tmp/restore.dump
+# Date-range backup (.sql)
+docker cp PLCDB2_2026-08-04_to_2026-08-05_2026-10-05_18-17-11.sql batch_report_db:/tmp/restore.sql
+docker exec batch_report_db psql -U postgres -d PLCDB2 -v ON_ERROR_STOP=1 -q -f /tmp/restore.sql
+docker compose start web
+```
+
+To look at a backup without touching production, restore it into a new
+database (`docker exec batch_report_db createdb -U postgres PLCDB2_check`, then
+use `-d PLCDB2_check` above).
+
+**Also** take a database dump regularly and copy it **off the PC**:
 
 ```powershell
 docker exec batch_report_db pg_dump -U postgres -Fc PLCDB2 -f /tmp/PLCDB2.dump

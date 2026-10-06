@@ -3,7 +3,7 @@
 {% block content %}
 <div class="inv-navbar">
   <div class="inv-navbar-left">
-    <span class="inv-app-title">Total Stock</span>
+    <span class="inv-app-title">Material Catalogue</span>
   </div>
 
   <div class="inv-navbar-right">
@@ -184,7 +184,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (deleteBtn) {
       const row = deleteBtn.closest("tr");
       const name = row.children[1].innerText.trim();
-      if (!confirm(`Delete material "${name}" from the Total Stock list?\n\n` +
+      if (!confirm(`Delete material "${name}" from the Material Catalogue list?\n\n` +
                    `Silos that already use it are not changed.`)) return;
       const result = await send(`/api/materials/delete/${row.dataset.id}`, "DELETE");
       if (result.success) loadMaterials();
@@ -233,7 +233,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const stamp = new Date().toISOString().slice(0, 16).replace("T", "_").replace(/:/g, "-");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `SKEW_TotalStock_${stamp}.xlsx`;
+    a.download = `SKEW_MaterialCatalogue_${stamp}.xlsx`;
     a.click();
     URL.revokeObjectURL(a.href);
   });

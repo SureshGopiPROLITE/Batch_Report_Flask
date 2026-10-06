@@ -26,16 +26,16 @@
 
         <div class="card-body">
 
-            <div class="form-row">
+            <!-- <div class="form-row">
                 <label>Enter Email ID</label>
                 <div class="input-group">
                     <input type="email" id="emailInput" placeholder="Enter Email ID">
                     <button id="setEmailIDBtn" class="set-button">Save</button>
                 </div>
-            </div>
+            </div> -->
 
             <div class="form-row">
-                <label>Report Name</label>
+                <label>Report Name & Logo</label>
                 <div class="input-group">
                     <input
                         type="text"
@@ -120,7 +120,7 @@
                         Disconnect
                     </button>
 
-                    <button id="saveBtn" style="margin-left: 550px;" class="set-button">
+                    <button id="saveBtn" class="set-button push-right">
                         Save
                     </button>
                 </div>
@@ -194,34 +194,35 @@
 
         </div>
 
-        <hr>
-
-        <!-- Custom Date Range Backup -->
-        <div class="backup-group">
-
-            <label style="margin-bottom: 12px;"><strong>Custom Date Range Backup</strong></label>
-
-            <div class="input-group">
-            <span style="padding:10px 5px;">From:</span>
-                <input
-                    type="date"
-                    id="customFromDate">
-
-                <span style="padding:10px 5px;">To:</span>
-
-                <input
-                    type="date"
-                    id="customToDate">
-
-                <button
-                    id="createCustomBackupBtn"
-                    class="set-button">
-                    Create Backup
-                </button>
-
+        <!-- Full backup -->
+        <div class="backup-option">
+            <div class="backup-option-text">
+                <strong>Full Backup</strong>
+                <span>The whole database - all batches, recipes, users and settings -
+                      as one <code>.dump</code> file that restores to an exact copy.</span>
             </div>
-
+            <button id="createFullBackupBtn" class="set-button">Full Backup</button>
         </div>
+
+        <!-- Date range backup -->
+        <div class="backup-option backup-option-range">
+            <div class="backup-option-text">
+                <strong>Date Range Backup</strong>
+                <span>Only the batches logged between the two dates, plus all recipes,
+                      users and settings (<code>.sql</code> file).</span>
+            </div>
+            <div class="backup-range">
+                <label>From
+                    <input type="date" id="customFromDate">
+                </label>
+                <label>To
+                    <input type="date" id="customToDate">
+                </label>
+                <button id="createCustomBackupBtn" class="set-button">Create Backup</button>
+            </div>
+        </div>
+
+        <p class="backup-note">The last 10 backups are also kept on this PC.</p>
 
     </div>
 
@@ -490,7 +491,7 @@ async function sendUpdateRequest(formData) {
 // Download Configuration
 
 document.getElementById("downloadConfigBtn")?.addEventListener("click", () => {
-    window.location.href = "/export-model-excel";
+    SkewLoading.download("/export-model-excel");
 });
 
 // Upload Configuration
@@ -546,7 +547,7 @@ document.getElementById("configFileInput")?.addEventListener("change", async fun
 // Download Recipe
 
 document.getElementById("downloadRecipeBtn")?.addEventListener("click", () => {
-    window.location.href = "/download-RecipeTag";
+    SkewLoading.download("/download-RecipeTag");
 });
 
 // Upload Recipe
@@ -591,14 +592,17 @@ document.getElementById("recipeFileInput")?.addEventListener("change", async fun
    CUSTOM DATE RANGE BACKUP
 ========================================== */
 
+document.getElementById("createFullBackupBtn")?.addEventListener("click", () => {
+    SkewLoading.download("/api/backup/custom", "Creating full backup...");
+});
+
 document.getElementById("createCustomBackupBtn")?.addEventListener("click", () => {
 
     const fromDate = document.getElementById("customFromDate").value;
     const toDate = document.getElementById("customToDate").value;
 
-    // Allow both empty -> full backup. Reject only-one-filled.
-    if ((fromDate && !toDate) || (!fromDate && toDate)) {
-        alert("Please select both From Date and To Date, or leave both empty for a full backup.");
+    if (!fromDate || !toDate) {
+        alert("Select both From Date and To Date (or use Full Backup).");
         return;
     }
 
@@ -614,7 +618,7 @@ document.getElementById("createCustomBackupBtn")?.addEventListener("click", () =
     }
 
     const query = params.toString();
-    window.location.href = `/api/backup/custom${query ? "?" + query : ""}`;
+    SkewLoading.download(`/api/backup/custom${query ? "?" + query : ""}`, "Creating backup...");
 });
 
 </script>

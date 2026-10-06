@@ -158,7 +158,7 @@ async function sendUpdateRequest(formData) {
 // ====================
 
 document.getElementById("downloadConfigBtn")?.addEventListener("click", () => {
-    window.location.href = "/export-model-excel";
+    SkewLoading.download("/export-model-excel");
 });
 
 // Upload PLC DB Configuration

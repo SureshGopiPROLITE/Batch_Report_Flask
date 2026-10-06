@@ -30,6 +30,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
+# pg_dump for the in-app database backup (Settings -> Database Management).
+# Must be the same major version as the postgres image in docker-compose.yml
+# (a pg_dump older than the server refuses to run). Debian only ships 15, so
+# it comes from the official PostgreSQL apt repository.
+ARG PG_MAJOR=18
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-${PG_MAJOR} \
+    && apt-get purge -y curl && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
 # XDG_CACHE_HOME: fontconfig needs a writable cache dir for the non-root user
 ENV TZ=Asia/Kolkata \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -39,7 +54,8 @@ ENV TZ=Asia/Kolkata \
     XDG_CACHE_HOME=/tmp/.cache \
     LOG_DIR=/app/logs \
     BACKUP_DIR=/app/Backups \
-    BACKUP_LOG_PATH=/app/Backups/backup_log.json
+    BACKUP_LOG_PATH=/app/Backups/backup_log.json \
+    PG_BIN=/usr/lib/postgresql/${PG_MAJOR}/bin
 
 WORKDIR /app
 
