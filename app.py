@@ -1,5 +1,6 @@
 from flask import (Flask, render_template, request, redirect, url_for, session, jsonify, abort, g, send_file, Response,)
 from werkzeug.security import check_password_hash, generate_password_hash
+import functools
 import io
 import logging
 import json
@@ -33,6 +34,18 @@ from modules.db_management import (
 app = Flask(__name__)
 app.secret_key = os.environ.get(
     'SECRET_KEY', '4f3d6e9a5f4b1c8d7e6a2b3c9d0e8f1a5b7c2d4e6f9a1b3c8d0e6f2a9b1d3c4')
+
+
+def superadmin_only(view):
+    """PLC Connection / Configuration Management actions: admins see those
+    cards read-only on Settings, only the superadmin may use them."""
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        if session.get('role') != 'superadmin':
+            msg = "Only the superadmin can do this."
+            return jsonify(success=False, message=msg, error=msg), 403
+        return view(*args, **kwargs)
+    return wrapper
 
 
 def open_browser():
@@ -1481,6 +1494,7 @@ def update_email():
 
 
 @app.route("/api/settings/save_column_settings", methods=["POST"])
+@superadmin_only
 def save_column_settings():
     try:
         data = request.get_json() or {}
@@ -1553,6 +1567,7 @@ def update_report():
 
 
 @app.route('/download-RecipeTag', methods=['GET'])
+@superadmin_only
 def download_RecipeTag():
     try:
         # Get database connection
@@ -1604,6 +1619,7 @@ def tag_table_error(df, required, what):
 
 
 @app.route('/upload-RecipeTag', methods=['POST'])
+@superadmin_only
 def upload_RecipeTag():
     try:
         if 'file' not in request.files:
@@ -1705,6 +1721,7 @@ def create_custom_backup_route():
 
 
 @app.route('/export-model-excel', methods=['GET'])
+@superadmin_only
 def model_excel():
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
 
@@ -1745,6 +1762,7 @@ def model_excel():
 
 
 @app.route('/upload-plc-db', methods=['POST'])
+@superadmin_only
 def upload_plc_db():
     conn = None
 
@@ -2556,6 +2574,7 @@ def logout():
 # PLC Connect / Disconnect / Status
 # ==========================================
 @app.route('/start_plc', methods=['POST'])
+@superadmin_only
 def start_plc():
     data = request.get_json(silent=True) or {}
     try:
@@ -2572,6 +2591,7 @@ def start_plc():
 
 
 @app.route('/stop_plc', methods=['POST'])
+@superadmin_only
 def stop_plc():
     if not monitor.is_running():
         return jsonify(success=False, status="disconnected",
@@ -2665,9 +2685,8 @@ def download_recipe():
 
 
 @app.route('/api/settings/set_driver', methods=['POST'])
+@superadmin_only
 def set_driver():
-    if session.get('role') not in ('admin', 'superadmin'):
-        return jsonify(success=False, message="Only an admin can change the PLC driver"), 403
     try:
         driver = int((request.get_json(silent=True) or {}).get('driver'))
     except (TypeError, ValueError):

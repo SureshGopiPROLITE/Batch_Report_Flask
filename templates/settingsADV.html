@@ -1,6 +1,23 @@
 {% extends 'base.html' %}
 
 {% block content %}
+<style>
+  /* Admin sees PLC Connection / Configuration Management read-only */
+  .card-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+  .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .view-only-badge {
+    font-size: 12px; font-weight: 600; color: #6b7280;
+    background: #f3f4f6; border: 1px solid #e5e7eb;
+    border-radius: 999px; padding: 3px 10px; white-space: nowrap;
+  }
+  .is-readonly fieldset[disabled] button,
+  .is-readonly fieldset[disabled] input,
+  .is-readonly fieldset[disabled] select { cursor: not-allowed; }
+  .is-readonly fieldset[disabled] button { opacity: 0.45; }
+  .is-readonly fieldset[disabled] input,
+  .is-readonly fieldset[disabled] select { background: #f3f4f6; color: #555; }
+  .is-readonly fieldset[disabled] .toggle-row { cursor: not-allowed; }
+</style>
 
 <div class="settings-page">
 
@@ -80,12 +97,15 @@
 
 
         <!-- PLC CONNECTION -->
-        {% if role == 'superadmin' %}
-        <div class="settings-card">
+        {% if role in ['admin', 'superadmin'] %}
+        {% set ro = role != 'superadmin' %}
+        <div class="settings-card{% if ro %} is-readonly{% endif %}">
             <div class="card-header">
                 <h3><svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> PLC Connection</h3>
+                {% if ro %}<span class="view-only-badge" title="Only the superadmin can change these settings">View only</span>{% endif %}
             </div>
 
+            <fieldset class="card-fieldset" {% if ro %}disabled{% endif %}>
             <div class="card-body">
 
                 <div class="form-row">
@@ -126,6 +146,7 @@
                 </div>
 
             </div>
+        </fieldset>
         </div>
         {% endif %}
 
@@ -230,12 +251,15 @@
 {% endif %}
 
         <!-- CONFIGURATION -->
-        {% if role == 'superadmin' %}
-        <div class="settings-card">
+        {% if role in ['admin', 'superadmin'] %}
+        {% set ro = role != 'superadmin' %}
+        <div class="settings-card{% if ro %} is-readonly{% endif %}">
             <div class="card-header">
                 <h3><svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> Configuration Management</h3>
+                {% if ro %}<span class="view-only-badge" title="Only the superadmin can change these settings">View only</span>{% endif %}
             </div>
 
+            <fieldset class="card-fieldset" {% if ro %}disabled{% endif %}>
             <div class="card-body">
 
                 <table class="config-table">
@@ -321,6 +345,7 @@
                     accept=".xlsx,.xls"
                     style="display:none;">
             </div>
+        </fieldset>
         </div>
         {% endif %}
 
