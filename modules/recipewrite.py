@@ -9,6 +9,7 @@ Driver 1 = Siemens (snap7, tags addressed by db_number/start_offset/data_type)
 Driver 2 = Rockwell (pylogix, tags addressed by Tag_name)
 """
 import logging
+import time
 
 import pandas as pd
 from sqlalchemy import text
@@ -263,6 +264,30 @@ def _write_siemens(p):
             pass
 
 
+def _write_rockwell_bulk(plc, df):
+    """Writes every row's Value to its Tag_name; returns the Status per row
+    ("Success" or the error). One list write: pylogix reads the unknown tag
+    types in batches and packs many writes into each request. Writing tag by
+    tag cost two network round trips per tag (type lookup + write) - fast
+    against a simulator, 10 s+ for a full recipe on a real plant network.
+    Tags the batch could not write are retried one by one."""
+    items = [(str(t), _plain(v)) for t, v in zip(df["Tag_name"], df["Value"])]
+    if not items:
+        return []
+    try:
+        results = plc.Write(items)
+        if not isinstance(results, list):
+            results = [results]
+        status = {r.TagName: r.Status for r in results}
+    except Exception as e:
+        logging.warning(f"Rockwell bulk write failed ({e}) - writing tag by tag")
+        status = {}
+    for tag, value in items:
+        if status.get(tag) != "Success":
+            status[tag] = pylogix.writeinAb(plc, tag, value)
+    return [status.get(tag, "Error") for tag, _ in items]
+
+
 def _write_rockwell(p):
     plc = pylogix.connectABPLC(p["ip"])
     if plc is None:
@@ -274,13 +299,10 @@ def _write_rockwell(p):
         if not ready:
             return {"success": False, "message": "Rockwell PLC is not ready to receive a recipe (ReadyToReceive is off)."}
 
-        def write(row):
-            return pylogix.writeinAb(plc, row["Tag_name"], _plain(row["Value"]))
-
         tags = p["dfRecipeTags"].sort_values("Slot", kind="stable")
-        tags["Status"] = tags.apply(write, axis=1)
+        tags["Status"] = _write_rockwell_bulk(plc, tags)
         header = p["dfHeader"]
-        header["Status"] = header.apply(write, axis=1)
+        header["Status"] = _write_rockwell_bulk(plc, header)
 
         failed = _failed_tags(tags, "Success") + _failed_tags(header, "Success")
         if failed:
@@ -305,6 +327,7 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
         return {"success": False, "message": str(e)}
 
     s = p["summary"]
+    started = time.monotonic()
     try:
         error = _write_siemens(p) if p["driver"] == DRIVER_SIEMENS else _write_rockwell(p)
     except Exception as e:
@@ -317,5 +340,6 @@ def writePlcRecipe(mixerno, recipe_name, selected_module):
 
     msg = (f"Recipe '{recipe_name}' downloaded to Mixer {s['mixer']} "
            f"({len(s['steps'])} steps, {s['driver_name']} {s['plc']})")
-    logging.info(msg)
+    logging.info(f"{msg} - {len(p['dfRecipeTags']) + len(p['dfHeader'])} tags "
+                 f"in {time.monotonic() - started:.1f} s")
     return {"success": True, "message": msg}

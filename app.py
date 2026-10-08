@@ -331,11 +331,18 @@ def add_recipe():
 
 @app.route("/api/recipes_data/delete_recipe/<string:name>", methods=["DELETE"])
 def delete_recipe(name):
+    """Deletes the recipe AND its steps. Deleting only the name left the steps
+    in recipeData, and re-importing the recipe then showed every step twice."""
+    if not _can_edit_recipes():
+        return jsonify({"success": False, "error": "Access denied"}), 403
     conn, cursorRead, cursorWrite = sqliteCon.get_db_connection()
-    cursorWrite.execute("DELETE FROM recipes WHERE name=%s", (name,))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
+    try:
+        with conn:   # both deletes or neither
+            cursorWrite.execute('DELETE FROM "recipeData" WHERE "Category"=%s', (name,))
+            cursorWrite.execute("DELETE FROM recipes WHERE name=%s", (name,))
+        return jsonify({"success": True})
+    finally:
+        conn.close()
 
 
 @app.route("/api/recipes_data/rename_recipe", methods=["PUT"])
@@ -615,12 +622,16 @@ def import_recipe_excel():
         if cursorRead.fetchone()[0] > 0:
             return jsonify({"success": False, "error": "Recipe already exists"}), 409
 
-        # 2 Insert recipe name
+        # 2 Insert recipe name. Committed together with its rows below, so a
+        # failed import leaves nothing behind (no empty recipe that blocks the
+        # next import with "Recipe already exists")
         cursorWrite.execute(
             "INSERT INTO recipes (name) VALUES (%s)",   # no set yet
             (category,)
         )
-        conn.commit()
+        # Steps left over from an older delete of this recipe would be listed
+        # together with the imported ones
+        cursorWrite.execute('DELETE FROM "recipeData" WHERE "Category"=%s', (category,))
 
         # 3 Insert all rows into recipeData, in the Excel row order
         for seq, (_, row) in enumerate(df.iterrows(), start=1):
@@ -631,7 +642,7 @@ def import_recipe_excel():
             mr = cursorRead.fetchone()
 
             if not mr:
-                conn.rollback()
+                conn.rollback()   # undoes the recipe name too
                 return jsonify({"success": False, "error": f"Silo not found: {silo}"}), 400
 
             cursorWrite.execute("""

@@ -77,6 +77,10 @@ def ensure_indexes():
         # ("Recipe Set 1"), for display only. It used to be a copy of the name
         # (never read) - clear those so each recipe is not its own set.
         "UPDATE recipes SET category = NULL WHERE category = name",
+        # Steps of recipes deleted before delete removed them too: nothing
+        # shows them, and a re-import of that recipe would list them twice
+        """DELETE FROM "recipeData" d
+           WHERE NOT EXISTS (SELECT 1 FROM recipes r WHERE r.name = d."Category")""",
         # A pre-release build kept the set in "SetName": move it to category
         """DO $$ BEGIN
                IF EXISTS (SELECT 1 FROM information_schema.columns

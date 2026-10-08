@@ -105,6 +105,26 @@ Then set the Station IP in Settings to `host.docker.internal` (Siemens:
 `host.docker.internal,0,1`). Remove the bridge with `-Remove`. A real PLC on
 the network (for example `192.168.0.1`) needs none of this.
 
+### Start SKEW automatically when the PC starts
+
+The containers restart by themselves whenever Docker Desktop runs
+(`restart: unless-stopped`). To get from power-on to SKEW on screen:
+
+1. **Windows signs in by itself.** Run `netplwiz`, untick *Users must enter a
+   user name and password*, and enter the account's password.
+2. **Docker Desktop starts at sign-in.** In Docker Desktop, go to Settings →
+   General and tick *Start Docker Desktop when you sign in*.
+3. **The browser opens once SKEW is ready.** In `C:\SKEW`, run:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy\open_skew.ps1 -Install          # default browser
+   powershell -ExecutionPolicy Bypass -File deploy\open_skew.ps1 -Install -Kiosk   # full-screen Edge, no address bar
+   ```
+   This puts a shortcut in the Startup folder. After sign-in it waits until
+   SKEW answers (up to 10 min), then opens it. Remove it with `-Uninstall`.
+   To leave kiosk mode, press **Alt+F4**.
+
+Test it by restarting the PC.
+
 ## 4. Licences (vendor)
 
 | Type | Behaviour |
