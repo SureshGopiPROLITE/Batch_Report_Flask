@@ -2327,6 +2327,75 @@ def export_materials():
             conn.close()
 
 
+# Material Catalogue -> Consumption Report tab
+
+def _consumption_request():
+    """(rows DataFrame, batches, search, from, to) for the posted range;
+    search keeps the materials whose name contains it."""
+    payload = request.get_json(silent=True) or {}
+    from_time, to_time = payload.get("from_time"), payload.get("to_time")
+    search = str(payload.get("search") or "").strip()
+    df, batches = main.consumption_report(from_time, to_time)
+    if search and not df.empty:
+        df = df[df["Material Name"].str.contains(search, case=False, regex=False)]
+    return df, batches, search, from_time, to_time
+
+
+def _consumption_totals(df):
+    return {c: round(float(df[c].sum()), 3) for c in main.CONSUMPTION_COLUMNS[1:]}
+
+
+@app.route("/api/consumption", methods=["POST"])
+def api_consumption():
+    try:
+        df, batches, search, _, _ = _consumption_request()
+        return jsonify({"success": True, "records": df.to_dict(orient="records"),
+                        "totals": _consumption_totals(df), "batches": batches})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logging.exception("Consumption report failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/consumption/export", methods=["POST"])
+def api_consumption_export():
+    try:
+        df, batches, search, from_time, to_time = _consumption_request()
+        if df.empty:
+            return jsonify({"success": False, "error": "No consumption in this range"}), 400
+
+        totals = _consumption_totals(df)
+        info = f"Consumption from {str(from_time).replace('T', ' ')} to {str(to_time).replace('T', ' ')}  |  {batches} batch(es)"
+        if search:
+            info += f'  |  Filter: "{search}"'
+
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name="Consumption", startrow=2)
+            ws = writer.sheets["Consumption"]
+            bold = writer.book.add_format({"bold": True})
+            ws.write(0, 0, info, bold)
+            last = len(df) + 3
+            ws.write(last, 0, f"Total ({len(df)} materials)", bold)
+            for i, c in enumerate(main.CONSUMPTION_COLUMNS[1:], start=1):
+                ws.write(last, i, totals[c], bold)
+            for i, c in enumerate(df.columns):
+                width = max([len(str(c))] + [len(str(v)) for v in df[c].head(500)]) + 2
+                ws.set_column(i, i, min(width, 45))
+            ws.freeze_panes(3, 0)
+        output.seek(0)
+
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        return send_file(output, as_attachment=True, download_name=f"SKEW_Consumption_{stamp}.xlsx",
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logging.exception("Consumption export failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/about')
 def about():
     from config.version import SOFTWARE_VERSION

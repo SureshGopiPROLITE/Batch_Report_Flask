@@ -1,21 +1,24 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="inv-navbar">
-  <div class="inv-navbar-left">
-    <span class="inv-app-title">Material Catalogue</span>
+<div class="analytics-content">
+  <!-- Tabs (same look as the Analytics page) -->
+  <div class="tabs" role="tablist">
+    <button class="tab-button cat-tab active" data-tab="materials" role="tab">Materials</button>
+    <button class="tab-button cat-tab" data-tab="consumption" role="tab">Consumption Report</button>
   </div>
 
-  <div class="inv-navbar-right">
-    <button class="add-btn" id="addRowBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Add</button>
-    <button class="add-btn" id="importBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% else %} title="Excel (.xlsx) with columns MaterialName, MaterialCode" {% endif %}>Import</button>
-    <button class="add-btn" id="exportBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Export</button>
-    <input type="file" id="importFile" accept=".xlsx" hidden>
-    <input class="search-input" type="text" id="searchBox" placeholder="Search name or code...">
+<!-- MATERIALS TAB -->
+<div class="tab-pane" data-pane="materials">
+  <div class="tab-toolbar">
+    <div class="inv-navbar-right">
+      <input class="search-input" type="text" id="searchBox" placeholder="Search name or code...">
+      <button class="inv-button" id="addRowBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Add</button>
+      <button class="inv-button" id="importBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% else %} title="Excel (.xlsx) with columns MaterialName, MaterialCode" {% endif %}>Import</button>
+      <button class="inv-button" id="exportBtn" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Export</button>
+      <input type="file" id="importFile" accept=".xlsx" hidden>
+    </div>
   </div>
-</div>
-
-<!-- TABLE -->
 <div class="stocks-table-wrapper">
   <table class="stocks-table">
     <thead>
@@ -34,6 +37,58 @@
     </tbody>
   </table>
 </div>
+</div>
+
+<!-- CONSUMPTION REPORT TAB -->
+<div class="tab-pane" data-pane="consumption" hidden>
+  <div class="tab-toolbar">
+    <div class="inv-navbar-right">
+      <input class="search-input" type="search" id="consSearch" placeholder="Search material...">
+      <div class="date-filter">
+        <span>From:</span>
+        <input type="datetime-local" id="consFrom" class="inv-input">
+      </div>
+      <div class="date-filter">
+        <span>To:</span>
+        <input type="datetime-local" id="consTo" class="inv-input">
+      </div>
+      <button class="inv-button" id="consViewBtn">View</button>
+      <button class="inv-button" id="consExportBtn">Export</button>
+      <span class="total-label" id="consSummary">Select From / To and press View.</span>
+    </div>
+  </div>
+  <div class="stocks-table-wrapper">
+    <table class="stocks-table" id="consTable">
+      <thead>
+        <tr>
+          <th>S.No</th>
+          <th class="cons-sort" data-col="1">Material Name</th>
+          <th class="cons-sort num" data-col="2">Total Set Weight (Tons)</th>
+          <th class="cons-sort num" data-col="3">Total Actual Weight (Tons)</th>
+          <th class="cons-sort num" data-col="4">Loss (Tons)</th>
+        </tr>
+      </thead>
+      <tbody id="consBody">
+        <tr><td colspan="5" class="table-error">No data yet</td></tr>
+      </tbody>
+      <tfoot id="consFoot"></tfoot>
+    </table>
+  </div>
+</div>
+</div>
+
+<style>
+  .tab-pane[hidden] { display: none; }
+  .tab-toolbar { display: flex; align-items: center; padding: 0.5rem 1rem; }
+  .tab-toolbar .inv-navbar-right { flex-wrap: wrap; row-gap: 6px; }
+  #consSummary { margin-left: 6px; }
+  #consSummary b { color: #005da2; }
+  #consTable th.cons-sort { cursor: pointer; }
+  #consTable th.num, #consTable td.num { text-align: right; padding-right: 18px; }
+  #consTable td.loss-pos { color: #b45309; }
+  #consTable td.loss-neg { color: #047857; }
+  #consTable tfoot td { font-weight: 700; background: #eef3f8; border-top: 2px solid #005da2; }
+</style>
 
 <script>
 document.addEventListener("DOMContentLoaded", () => {
@@ -239,6 +294,138 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   loadMaterials();
+
+  /* =========================================================
+       TABS (Materials | Consumption Report) - #consumption in the
+       address opens the report tab directly
+  ========================================================= */
+  function showTab(name) {
+    document.querySelectorAll(".cat-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+    document.querySelectorAll(".tab-pane").forEach(p => p.hidden = p.dataset.pane !== name);
+    history.replaceState(null, "", name === "materials" ? location.pathname : "#" + name);
+    if (name === "consumption" && !consLoaded) loadConsumption();
+  }
+  document.querySelectorAll(".cat-tab").forEach(t => t.addEventListener("click", () => showTab(t.dataset.tab)));
+
+  /* =========================================================
+       CONSUMPTION REPORT
+       Set / actual weight per material over the batches logged between
+       From and To (tons). Loss = Actual - Set.
+  ========================================================= */
+  const consFrom = document.getElementById("consFrom");
+  const consTo = document.getElementById("consTo");
+  const consSearch = document.getElementById("consSearch");
+  const consBody = document.getElementById("consBody");
+  const consFoot = document.getElementById("consFoot");
+  const consSummary = document.getElementById("consSummary");
+  let consLoaded = false;
+  let consRecords = [];
+  setDefaultRange(null, consFrom, consTo);          // last 24 hours (base.html)
+
+  const fmt3 = (v) => Number(v || 0).toFixed(3);
+  const COLS = ["Material Name", "Total Set Weight (Tons)", "Total Actual Weight (Tons)", "Loss (Tons)"];
+
+  function renderConsumption() {
+    const q = consSearch.value.trim().toLowerCase();
+    const rows = consRecords.filter(r => r["Material Name"].toLowerCase().includes(q));
+    if (!rows.length) {
+      consBody.innerHTML = `<tr><td colspan="5" class="table-error">${
+        consRecords.length ? "No material matches the search" : "No consumption in this range"}</td></tr>`;
+      consFoot.innerHTML = "";
+      return;
+    }
+    consBody.innerHTML = rows.map((r, i) => {
+      const loss = Number(r["Loss (Tons)"]);
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>${esc(r["Material Name"])}</td>
+        <td class="num">${fmt3(r["Total Set Weight (Tons)"])}</td>
+        <td class="num">${fmt3(r["Total Actual Weight (Tons)"])}</td>
+        <td class="num ${loss > 0 ? "loss-pos" : loss < 0 ? "loss-neg" : ""}">${fmt3(loss)}</td>
+      </tr>`;
+    }).join("");
+    const sum = (c) => rows.reduce((t, r) => t + Number(r[c] || 0), 0);
+    consFoot.innerHTML = `<tr>
+      <td></td><td>Total (${rows.length} materials)</td>
+      <td class="num">${fmt3(sum(COLS[1]))}</td>
+      <td class="num">${fmt3(sum(COLS[2]))}</td>
+      <td class="num">${fmt3(sum(COLS[3]))}</td>
+    </tr>`;
+  }
+
+  async function loadConsumption() {
+    if (!consFrom.value || !consTo.value) return alert("Select both From and To.");
+    if (consTo.value < consFrom.value) return alert("To cannot be before From.");
+    consLoaded = true;
+    consSummary.textContent = "Loading...";
+    try {
+      const res = await fetch("/api/consumption", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from_time: consFrom.value, to_time: consTo.value })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        consRecords = [];
+        renderConsumption();
+        consSummary.textContent = data.error || "Could not load the report";
+        return;
+      }
+      consRecords = data.records;
+      consSummary.innerHTML = `<b>${data.batches}</b> batch(es) from <b>${esc(consFrom.value.replace("T", " "))}</b>` +
+                              ` to <b>${esc(consTo.value.replace("T", " "))}</b>`;
+      renderConsumption();
+    } catch (e) {
+      consSummary.textContent = "Server error - " + e.message;
+    }
+  }
+
+  document.getElementById("consViewBtn").addEventListener("click", loadConsumption);
+  consSearch.addEventListener("input", renderConsumption);
+
+  // Sort by a column (click again = reverse); numbers numerically
+  let consSort = {};
+  document.querySelectorAll("#consTable th.cons-sort").forEach(th => {
+    th.addEventListener("click", () => {
+      const key = COLS[Number(th.dataset.col) - 1];
+      const dir = consSort[key] = consSort[key] === "asc" ? "desc" : "asc";
+      const sign = dir === "asc" ? 1 : -1;
+      consRecords.sort((a, b) => key === COLS[0]
+        ? sign * a[key].localeCompare(b[key], undefined, { sensitivity: "base" })
+        : sign * (Number(a[key]) - Number(b[key])));
+      renderConsumption();
+    });
+  });
+
+  document.getElementById("consExportBtn").addEventListener("click", async (e) => {
+    if (!consFrom.value || !consTo.value) return alert("Select both From and To.");
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/consumption/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from_time: consFrom.value, to_time: consTo.value,
+                               search: consSearch.value.trim() })
+      });
+      if (!res.ok) {
+        let msg = `Export failed (${res.status})`;
+        try { msg = (await res.json()).error || msg; } catch (err) {}
+        return alert(msg);
+      }
+      const blob = await res.blob();
+      const name = (res.headers.get("Content-Disposition") || "").match(/filename="?([^";]+)"?/);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name ? name[1] : "SKEW_Consumption.xlsx";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  if (location.hash === "#consumption") showTab("consumption");
 });
 </script>
 

@@ -926,3 +926,68 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
     finally:
         _close(conn, engineConRead, engineConWrite)
 
+
+
+# --------------------------------------------------------------------------
+# Material Catalogue -> Consumption Report
+# --------------------------------------------------------------------------
+CONSUMPTION_COLUMNS = ["Material Name", "Total Set Weight (Tons)",
+                       "Total Actual Weight (Tons)", "Loss (Tons)"]
+NO_MATERIAL = "(no material name)"
+
+
+def consumption_report(from_time, to_time):
+    """Set / actual weight per material over the batches logged between
+    from_time and to_time (plc_data.TimeStamp), in tons.
+
+    plc_data has one row per value: per batch and silo the MaterialName,
+    SetWeight and ActualWeight rows are pivoted to one line, then summed per
+    unique material name. Loss = Actual - Set (same as the dashboard's
+    Total Loss; positive = more dosed than set).
+    Returns (DataFrame with CONSUMPTION_COLUMNS, number of batches)."""
+    from modules.monitor import INVALID_MATERIALS
+
+    start, end = pd.to_datetime(from_time), pd.to_datetime(to_time)
+    if pd.isna(start) or pd.isna(end):
+        raise ValueError("Select both From and To date and time")
+    if end < start:
+        raise ValueError("To cannot be before From")
+
+    conn, cur, _ = sqliteCon.get_db_connection()
+    try:
+        # Pivot in the database: one row per (batch, silo)
+        cur.execute("""
+            SELECT "BatchNo", "Category",
+                   MAX(CASE WHEN "Name" = 'MaterialName' THEN "Value" END) AS material,
+                   MAX(CASE WHEN "Name" = 'SetWeight'    THEN "Value" END) AS set_weight,
+                   MAX(CASE WHEN "Name" = 'ActualWeight' THEN "Value" END) AS actual_weight
+            FROM plc_data
+            WHERE "TimeStamp" BETWEEN %s AND %s
+              AND "Category" NOT IN ('Info', 'Summary')
+              AND "Name" IN ('MaterialName', 'SetWeight', 'ActualWeight')
+            GROUP BY "BatchNo", "Category"
+        """, (start.to_pydatetime(), end.to_pydatetime()))
+        rows = pd.DataFrame(cur.fetchall(),
+                            columns=["BatchNo", "Category", "Material", "SetWeight", "ActualWeight"])
+    finally:
+        conn.close()
+
+    if rows.empty:
+        return pd.DataFrame(columns=CONSUMPTION_COLUMNS), 0
+
+    rows["SetWeight"] = pd.to_numeric(rows["SetWeight"], errors="coerce").fillna(0)
+    rows["ActualWeight"] = pd.to_numeric(rows["ActualWeight"], errors="coerce").fillna(0)
+    # Silos that were not dosed (nothing set, nothing weighed) are not consumption
+    rows = rows[(rows["SetWeight"] != 0) | (rows["ActualWeight"] != 0)]
+    material = rows["Material"].fillna("").astype(str).str.strip()
+    rows["Material"] = material.where(~material.isin(INVALID_MATERIALS), NO_MATERIAL)
+
+    per = (rows.groupby("Material", as_index=False)[["SetWeight", "ActualWeight"]].sum()
+               .sort_values("Material", key=lambda s: s.str.lower()))
+    out = pd.DataFrame({
+        "Material Name": per["Material"],
+        "Total Set Weight (Tons)": (per["SetWeight"] / 1000).round(3),
+        "Total Actual Weight (Tons)": (per["ActualWeight"] / 1000).round(3),
+    })
+    out["Loss (Tons)"] = (out["Total Actual Weight (Tons)"] - out["Total Set Weight (Tons)"]).round(3)
+    return out.reset_index(drop=True), int(rows["BatchNo"].nunique())
