@@ -1056,7 +1056,8 @@ def api_plc_data_multi():
 @app.route('/api/export_data', methods=['POST'])
 def api_export_data():
     """Excel of the report rows. With "batch_nos" (the rows left after the
-    search box filter) only those batches are exported."""
+    search box filter, or the rows ticked in the table) only those batches
+    are exported."""
     try:
         payload = request.get_json(silent=True) or {}
         hours = payload.get('hours')
@@ -1064,6 +1065,7 @@ def api_export_data():
         to_time = payload.get('to_time')
         batch_nos = payload.get('batch_nos')
         search = (payload.get('search') or "").strip()
+        selected = payload.get('selected')    # rows ticked in the table
 
         result = main.data_process(hours, from_time, to_time)
         df = pd.DataFrame(result.get("data") or [])
@@ -1091,6 +1093,8 @@ def api_export_data():
             info = [f"Range: {from_time or ''} to {to_time or ''}" if hours == "Custom" else f"Range: last {hours}"]
             if search:
                 info.append(f'Filter: "{search}"')
+            if selected:
+                info.append(f"Selected: {len(df)} batch(es)")
             df.to_excel(writer, index=False, sheet_name='ReportData', startrow=2)
             ws = writer.sheets['ReportData']
             bold = writer.book.add_format({"bold": True})

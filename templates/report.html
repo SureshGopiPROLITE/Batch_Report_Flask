@@ -71,6 +71,7 @@
   <span><b id="selCount">0</b> batch(es) selected</span>
   <button id="selPdf" class="inv-button primary" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Download PDF</button>
   <button id="selExcel" class="inv-button success" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Download Excel</button>
+  <button id="selHeader" class="inv-button" title="Batch header rows of the selected batches - same columns as Export">Export Header</button>
   <button id="selClear" class="link-btn">Clear selection</button>
   <span id="selStatus"></span>
 </div>
@@ -314,23 +315,29 @@ document.addEventListener("DOMContentLoaded", () => {
   /* ================= EXPORT ================= */
   // Exports what the table shows: with text in the search box only the
   // matching rows (Mixer No, Shift, Total Set / Actual Weight included).
-  exportBtn.addEventListener("click", async () => {
-
-    const hours = hourSelect.value;
-    const from_time = fromDate.value;
-    const to_time = toDate.value;
+  exportBtn.addEventListener("click", () => {
     const search = searchInput.value.trim();
-
     const visible = Array.from(tableBody.querySelectorAll("tr[data-batch]"))
       .filter(tr => tr.style.display !== "none")
       .map(tr => Number(tr.dataset.batch));
 
     if (search && !visible.length) return alert("No rows match the search - nothing to export.");
+    exportHeader(exportBtn, search ? visible : null, search);
+  });
+
+  // Excel of the batch header rows (the report table columns). batch_nos:
+  // only those batches (search filter or ticked rows), null = whole range.
+  async function exportHeader(button, batch_nos, search, selectedCount) {
+
+    const hours = hourSelect.value;
+    const from_time = fromDate.value;
+    const to_time = toDate.value;
 
     const body = { hours, from_time, to_time, search };
-    if (search) body.batch_nos = visible;
+    if (batch_nos) body.batch_nos = batch_nos;
+    if (selectedCount) body.selected = selectedCount;
 
-    exportBtn.disabled = true;
+    button.disabled = true;
     try {
       const res = await fetch("/api/export_data", {
         method: "POST",
@@ -349,7 +356,8 @@ document.addEventListener("DOMContentLoaded", () => {
       // Make filename safe (replace ":" with "-")
       const safeFrom = (from_time || hours).replace(/[:T ]/g, "-");
       const safeTo = (to_time || "now").replace(/[:T ]/g, "-");
-      const tag = search ? `_filtered-${search.replace(/[^\w-]+/g, "_").slice(0, 30)}` : "";
+      const tag = selectedCount ? `_selected-${selectedCount}`
+                : search ? `_filtered-${search.replace(/[^\w-]+/g, "_").slice(0, 30)}` : "";
 
       const a = document.createElement("a");
       a.href = url;
@@ -357,9 +365,9 @@ document.addEventListener("DOMContentLoaded", () => {
       a.click();
       URL.revokeObjectURL(url);
     } finally {
-      exportBtn.disabled = false;
+      button.disabled = false;
     }
-  });
+  }
 
 
   /* ================= MULTI-SELECT ================= */
@@ -444,6 +452,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   document.getElementById("selPdf").addEventListener("click", () => downloadSelected("pdf"));
   document.getElementById("selExcel").addEventListener("click", () => downloadSelected("excel"));
+  document.getElementById("selHeader").addEventListener("click", (e) => {
+    const batch_nos = selectedBatches();
+    if (batch_nos.length) exportHeader(e.currentTarget, batch_nos, "", batch_nos.length);
+  });
 
 
   /* ================= POPUP ================= */
