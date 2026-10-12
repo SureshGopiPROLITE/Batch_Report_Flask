@@ -982,6 +982,45 @@ REPORT_EXPORT_COLUMNS = ["BatchNo", "TimeStamp", "Shift", "Plant Name", "Recipe 
 MULTI_REPORT_LIMIT = {"pdf": 100, "excel": 500}
 
 
+HEADER_EXPORT_LIMIT = 500
+
+
+@app.route('/api/plc_data/header/pdf', methods=['POST'])
+def api_plc_data_header_pdf():
+    """Batch header (Recipe, Batch No, Start / End, Mixer, Time Taken, Total
+    Set / Actual Weight, Shift, Plant) as PDF - the block on top of the batch
+    report, without the silo table. body: {"batch_nos": [...]}; several
+    batches -> one block each."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        try:
+            batch_nos = sorted({int(b) for b in payload.get("batch_nos") or []})
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "batch_nos must be numbers"}), 400
+        if not batch_nos:
+            return jsonify({"success": False, "error": "Select at least one batch"}), 400
+        if len(batch_nos) > HEADER_EXPORT_LIMIT:
+            return jsonify({"success": False,
+                            "error": f"{len(batch_nos)} batches selected - header export allows up to {HEADER_EXPORT_LIMIT} at a time"}), 400
+
+        batches = []
+        for no in batch_nos:
+            df_pivot, df_string, daily_batch_no, df_cal_sum = main.report_data_process(no)
+            if isinstance(df_string, pd.DataFrame) and not df_string.empty:
+                batches.append((no, df_string, df_cal_sum))
+        if not batches:
+            return jsonify({"success": False, "error": "No data found for the selected batches"}), 404
+
+        data = Report.generate_header_pdf(batches)
+        name = (f"BatchHeader_{batches[0][0]}.pdf" if len(batches) == 1
+                else f"BatchHeaders_{len(batches)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+        return send_file(io.BytesIO(data), as_attachment=True, download_name=name,
+                         mimetype="application/pdf")
+    except Exception as e:
+        logging.exception("Header export failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/plc_data/multi', methods=['POST'])
 def api_plc_data_multi():
     """Batch reports for the rows ticked in the report table.
@@ -1056,8 +1095,7 @@ def api_plc_data_multi():
 @app.route('/api/export_data', methods=['POST'])
 def api_export_data():
     """Excel of the report rows. With "batch_nos" (the rows left after the
-    search box filter, or the rows ticked in the table) only those batches
-    are exported."""
+    search box filter) only those batches are exported."""
     try:
         payload = request.get_json(silent=True) or {}
         hours = payload.get('hours')
@@ -1065,7 +1103,6 @@ def api_export_data():
         to_time = payload.get('to_time')
         batch_nos = payload.get('batch_nos')
         search = (payload.get('search') or "").strip()
-        selected = payload.get('selected')    # rows ticked in the table
 
         result = main.data_process(hours, from_time, to_time)
         df = pd.DataFrame(result.get("data") or [])
@@ -1093,8 +1130,6 @@ def api_export_data():
             info = [f"Range: {from_time or ''} to {to_time or ''}" if hours == "Custom" else f"Range: last {hours}"]
             if search:
                 info.append(f'Filter: "{search}"')
-            if selected:
-                info.append(f"Selected: {len(df)} batch(es)")
             df.to_excel(writer, index=False, sheet_name='ReportData', startrow=2)
             ws = writer.sheets['ReportData']
             bold = writer.book.add_format({"bold": True})

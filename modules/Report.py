@@ -5,6 +5,7 @@ os.environ["GDK_BACKEND"] = "none"
 os.environ["NO_AT_BRIDGE"] = "1"
 os.environ["WEASYPRINT_GUI"] = "false"
 
+import html as html_lib
 import pandas as pd
 import base64
 from datetime import datetime
@@ -76,15 +77,18 @@ def encode_logo(logo_path):
 # 🔹 PDF Report Generator
 # ==========================================================
 
+# A4 portrait, content fills the printable width (the old scale(0.86) left
+# it small and off-centre); page number at the bottom of every page
 PDF_PAGE_CSS = """
     @page {
         size: A4;
-        margin: 6mm;
-    }
-
-    body {
-        transform: scale(0.86);
-        transform-origin: top center;
+        margin: 12mm 10mm 14mm 10mm;
+        @bottom-right {
+            content: "Page " counter(page) " of " counter(pages);
+            font-family: "DejaVu Sans", Arial, sans-serif;
+            font-size: 7.5pt;
+            color: #6b7280;
+        }
     }
 """
 
@@ -338,208 +342,201 @@ def generate_multi_excel_report(batches, summary=None, include_speed=True):
 # 🔹 HTML Template for PDF
 # ==========================================================
 
+# Fields of the batch header, in the order of the PDF / Excel header block:
+# left column, then right column
+HEADER_FIELDS = [
+    ("Recipe Name", "recipe_name"),
+    ("Batch No", "batch_no"),
+    ("Start Time", "start_time"),
+    ("End Time", "end_time"),
+    ("Mixer No", "mixer_no"),
+    ("Time Taken(Min)", "time_taken"),
+    ("Total Set Weight(Kg)", "total_set_weight"),
+    ("Total Actual Weight(Kg)", "total_actual_weight"),
+    ("Shift", "shift"),
+    ("Plant Name", "plant_name"),
+]
+
+
+def _h(value):
+    """Text for the PDF HTML: escaped, empty for nan/None."""
+    return html_lib.escape(str(_blank(value)))
+
+
+# Shared by the batch report PDF and the header-only PDF. No web fonts:
+# plant PCs are often offline (the font request would only time out).
+REPORT_CSS = """<style>
+    /* No web fonts: plant PCs are often offline (the request would only time out) */
+    body {
+        margin: 0;
+        font-family: "DejaVu Sans", "Segoe UI", Arial, sans-serif;
+        font-size: 9.5pt;
+        color: #1f2937;
+    }
+
+    /* ---- title bar ---- */
+    .title-bar { width: 100%; border-collapse: collapse; margin-bottom: 4mm; }
+    .title-bar td { border: none; padding: 0; vertical-align: middle; }
+    .title-bar .logo img { height: 11mm; }
+    .title-bar .title { text-align: center; font-size: 18pt; font-weight: bold;
+                         letter-spacing: 1px; color: #111827; }
+    .title-bar .printed { text-align: right; font-size: 8.5pt; color: #4b5563; white-space: nowrap; }
+    .rule { border: 0; border-top: 2px solid #005da2; margin: 0 0 4mm; }
+
+    /* ---- batch header ---- */
+    .info { width: 100%; border-collapse: collapse; margin-bottom: 5mm;
+             border: 1px solid #d6dde6; background: #f7f9fc; }
+    .info th, .info td { border: none; padding: 1.6mm 2.5mm; text-align: left; font-size: 9.5pt; }
+    .info th { width: 21%; color: #374151; font-weight: bold; white-space: nowrap; }
+    .info td { width: 29%; }
+
+    h2 { font-size: 11pt; margin: 0 0 2mm; color: #005da2; }
+
+    /* ---- data table ---- */
+    .data { width: 100%; border-collapse: collapse; }
+    .data thead { display: table-header-group; }     /* repeat on every page */
+    .data tr { page-break-inside: avoid; }
+    .data th { background: #005da2; color: #fff; font-size: 8pt; font-weight: bold;
+                padding: 1.8mm 1.2mm; border: 1px solid #005da2; text-align: center; }
+    .data td { border: 1px solid #d6dde6; padding: 1.5mm 1.2mm; font-size: 8.5pt;
+                text-align: center; white-space: nowrap; }
+    .data td.left { text-align: left; white-space: normal; }
+    .data tbody tr:nth-child(even) td { background: #f5f8fb; }
+
+    .footer { text-align: center; font-size: 7.5pt; color: #6b7280; margin-top: 4mm; }
+</style>
+"""
+
+
+def _title_bar(logo_base64, title, printed_date):
+    return f"""
+    <table class="title-bar">
+        <tr>
+            <td class="logo" style="width:30%"><img src="data:image/png;base64,{logo_base64}" alt="Logo"></td>
+            <td class="title" style="width:40%">{_h(title)}</td>
+            <td class="printed" style="width:30%">Printed: {_h(printed_date)}</td>
+        </tr>
+    </table>
+    <hr class="rule">"""
+
+
+def _header_block(details):
+    """The batch header: 5 rows of label | value | label | value."""
+    def value(key):
+        v = _h(details.get(key))
+        if key in ("total_set_weight", "total_actual_weight") and v not in ("", "N/A"):
+            v += " Kg"
+        return v
+
+    half = len(HEADER_FIELDS) // 2
+    rows = "".join(
+        f"<tr><th>{l1}</th><td>{value(k1)}</td><th>{l2}</th><td>{value(k2)}</td></tr>"
+        for (l1, k1), (l2, k2) in zip(HEADER_FIELDS[:half], HEADER_FIELDS[half:])
+    )
+    return f'<table class="info">{rows}</table>'
+
+
 def generate_html_report(
     df,
     logo_base64,
     details,
     include_speed=True
 ):
-
-    # ======================================================
-    # 🔹 Generate Data Rows
-    # ======================================================
-
+    # ---------------- data rows ----------------
     data_rows = ""
     for _, row in df.iterrows():
-        data_rows += f"""
-        <tr>
-            <td>{row["SiloNo"]}</td>
-            <td>{row["MaterialName"]}</td>
-            <td>{row["SetWeight"]}</td>
-            <td>{row["ActualWeight"]}</td>
-            <td>{row["Difference"]}</td>
-            <td>{row["Tolerance"]}</td>
-            <td>{_blank(row.get("InflightWeight"))}</td>
-        """
-
-        # Add speed columns only when enabled
+        cells = [
+            f'<td>{_h(row.get("SiloNo"))}</td>',
+            f'<td class="left">{_h(row.get("MaterialName"))}</td>',
+            f'<td>{_h(row.get("SetWeight"))}</td>',
+            f'<td>{_h(row.get("ActualWeight"))}</td>',
+            f'<td>{_h(row.get("Difference"))}</td>',
+            f'<td>{_h(row.get("Tolerance"))}</td>',
+            f'<td>{_h(row.get("InflightWeight"))}</td>',
+        ]
         if include_speed:
-            data_rows += f"""
-            <td>{row.get("CoarseSpeed", "")}</td>
-            <td>{row.get("FineSpeed", "")}</td>
-            """
-        data_rows += f"""
-            <td>{row.get("StartTime", "")}</td>
-            <td>{row.get("EndTime", "")}</td>
-            <td>{row.get("Duration", "")}</td>
-        </tr>
-        """
+            cells += [f'<td>{_h(row.get("CoarseSpeed"))}</td>',
+                      f'<td>{_h(row.get("FineSpeed"))}</td>']
+        cells += [f'<td>{_h(row.get("StartTime"))}</td>',
+                  f'<td>{_h(row.get("EndTime"))}</td>',
+                  f'<td>{_h(row.get("Duration"))}</td>']
+        data_rows += "<tr>" + "".join(cells) + "</tr>\n"
 
-    # ======================================================
-    # 🔹 Speed Table Headers
-    # ======================================================
-    speed_headers = ""
-    if include_speed:
-        speed_headers = """
-            <th>Coarse Speed (%)</th>
-            <th>Fine Speed (%)</th>
-        """
+    speed_headers = ("<th>Coarse Speed<br>(%)</th><th>Fine Speed<br>(%)</th>"
+                     if include_speed else "")
 
-    # ======================================================
-    # 🔹 HTML Template
-    # ======================================================
-    html_template = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Batch Report</title>
-        <style>
-            @import url(
-                'https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap'
-            );
-            @page {{
-                size: A4;
-                margin: 20mm;
-            }}
-            body {{
-                font-family: 'Roboto', sans-serif;
-                margin: 20px;
-                font-size: 12pt;
-            }}
-            h1 {{
-                text-align: center;
-                margin-bottom: 20px;
-            }}
-            .header {{
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 20px;
-            }}
-            .printed-date {{
-                text-align: right;
-                font-weight: bold;
-                font-size: 12pt;
-            }}
-            .container {{
-                margin-bottom: 20px;
-            }}
-            .info-section table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin-bottom: 20px;
-            }}
-            .info-section td {{
-                padding: 8px;
-                text-align: left;
-                border: none;
-            }}
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin-bottom: 20px;
-            }}
-            td,
-            th {{
-                padding: 8px 6px;
-                text-align: center;
-                border: 1px solid #ddd;
-                font-size: 10pt;
-            }}
-            th {{
-                background-color: #f2f2f2;
-                font-weight: bold;
-            }}
-            .footer {{
-                text-align: center;
-                margin-top: 20px;
-                font-weight: bold;
-            }}
-            .small-footer {{
-                text-align: center;
-                font-size: 10px;
-                margin-top: 10px;
-            }}
-        </style>
-    </head>
-    <body>
-        <h1>BATCH REPORT</h1>
-        <div class="header">
-            <img
-                src="data:image/png;base64,{logo_base64}"
-                alt="Logo"
-                style="width: 100px;"
-            >
-            <div class="printed-date">
-                Printed Date: {details['printed_date']}
-            </div>
-        </div>
-        <div class="container">
-            <div class="info-section">
-                <table>
-                    <tr>
-                        <td><b>Recipe Name:</b></td>
-                        <td>{details['recipe_name']}</td>
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Batch Report</title>
+{REPORT_CSS}
+</head>
+<body>
+    {_title_bar(logo_base64, "BATCH REPORT", details['printed_date'])}
 
-                        <td><b>Time Taken(Min):</b></td>
-                        <td>{details['time_taken']}</td>
-                    </tr>
+    {_header_block(details)}
 
-                    <tr>
-                        <td><b>Batch No:</b></td>
-                        <td>{details['batch_no']}</td>
-
-                        <td><b>Total Set Weight(Kg):</b></td>
-                        <td>{details['total_set_weight']} Kg</td>
-                    </tr>
-                    <tr>
-                        <td><b>Start Time:</b></td>
-                        <td>{details['start_time']}</td>
-                        
-                        <td><b>Total Actual Weight(Kg):</b></td>
-                        <td>{details['total_actual_weight']} Kg</td>
-                    </tr>
-
-                    <tr>
-                        <td><b>End Time:</b></td>
-                        <td>{details['end_time']}</td>
-
-                        <td><b>Shift:</b></td>
-                        <td>{details['shift']}</td>
-                    </tr>
-
-                    <tr>
-                        <td><b>Mixer No:</b></td>
-                        <td>{details['mixer_no']}</td>
-
-                        <td><b>Plant Name:</b></td>
-                        <td>{details['plant_name']}</td>
-                    </tr>
-                </table>
-            </div>
-        </div>
-        <h2>Data Table</h2>
-        <table>
+    <h2>Data Table</h2>
+    <table class="data">
+        <thead>
             <tr>
-                <th>Silo No</th>
+                <th>Silo<br>No</th>
                 <th>Material Name</th>
-                <th>Set Weight (Kg)</th>
-                <th>Actual Weight (Kg)</th>
-                <th>Difference (Kg)</th>
-                <th>Tolerance (Kg)</th>
-                <th>Inflight Weight (Kg)</th>
+                <th>Set Weight<br>(Kg)</th>
+                <th>Actual Weight<br>(Kg)</th>
+                <th>Difference<br>(Kg)</th>
+                <th>Tolerance<br>(Kg)</th>
+                <th>Inflight Weight<br>(Kg)</th>
                 {speed_headers}
-                <th>Start Time</th>
-                <th>End Time</th>
-                <th>Duration (hh:mm:ss)</th>
+                <th>Start<br>Time</th>
+                <th>End<br>Time</th>
+                <th>Duration<br>(hh:mm:ss)</th>
             </tr>
+        </thead>
+        <tbody>
             {data_rows}
-        </table>
-        <div class="small-footer">
-            This report is generated by Skew Reporting Software,
-            developed by Prolite Automation.
-        </div>
-    </body>
-    </html>
-    """
-    return html_template
+        </tbody>
+    </table>
+
+    <div class="footer">
+        This report is generated by Skew Reporting Software, developed by Prolite Automation.
+    </div>
+</body>
+</html>
+"""
+
+
+# ==========================================================
+# 🔹 Batch header PDF (Report "Export Header")
+# ==========================================================
+
+def generate_header_pdf(batches):
+    """batches: [(batch_no, df_string, df_cal_sum), ...] -> PDF bytes with
+    only the batch header (the block on top of the batch report). Several
+    batches: their blocks one after another, never split across a page."""
+    logo_base64 = encode_logo("data_files/logo.png")
+    details = [_report_details(string, cal, no) for no, string, cal in batches]
+    title = "BATCH HEADER" if len(details) == 1 else f"BATCH HEADERS ({len(details)})"
+    blocks = "".join(f'<div class="header-item">{_header_block(d)}</div>' for d in details)
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Batch Header</title>
+{REPORT_CSS}
+<style>
+    .header-item {{ page-break-inside: avoid; }}
+    .header-item .info {{ margin-bottom: 4mm; }}
+</style>
+</head>
+<body>
+    {_title_bar(logo_base64, title, details[0]['printed_date'])}
+    {blocks}
+    <div class="footer">
+        This report is generated by Skew Reporting Software, developed by Prolite Automation.
+    </div>
+</body>
+</html>
+"""
+    return HTML(string=html).render(stylesheets=[CSS(string=PDF_PAGE_CSS)]).write_pdf()
