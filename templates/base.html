@@ -27,32 +27,76 @@
         }
         .skew-loading.show { opacity: 1; visibility: visible; }
         .skew-loading-box {
-            min-width: 260px;
-            padding: 26px 34px;
-            border-radius: 12px;
+            min-width: 270px;
+            padding: 28px 36px 24px;
+            border-radius: 16px;
             background: #fff;
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+            box-shadow: 0 14px 44px rgba(0, 0, 0, 0.22);
             text-align: center;
             font-family: inherit;
+            transform: scale(0.96);
+            transition: transform 0.15s ease;
         }
-        .skew-loading-spinner {
-            width: 46px;
-            height: 46px;
-            margin: 0 auto 14px;
-            border: 4px solid #d6e6f5;
-            border-top-color: #005da2;
+        .skew-loading.show .skew-loading-box { transform: scale(1); }
+
+        /* Blue icon disc in a soft halo, with two arcs turning around it */
+        .skew-loading-ring {
+            position: relative;
+            width: 72px;
+            height: 72px;
+            margin: 0 auto 16px;
+        }
+        .skew-loading-ring::before,
+        .skew-loading-ring::after {
+            content: "";
+            position: absolute;
             border-radius: 50%;
-            animation: skew-spin 0.8s linear infinite;
+            border: 3px solid transparent;
         }
-        .skew-loading-text { font-weight: 600; color: #1f2d3d; font-size: 1rem; }
-        .skew-loading-sub { margin-top: 4px; color: #777; font-size: 0.85rem; }
+        .skew-loading-ring::before {               /* outer arc, solid blue */
+            inset: 0;
+            border-top-color: #1f7ae0;
+            border-left-color: #1f7ae0;
+            animation: skew-spin 1s linear infinite;
+        }
+        .skew-loading-ring::after {                /* inner arc, light blue, other way */
+            inset: 6px;
+            border-width: 2px;
+            border-bottom-color: #8fc0f2;
+            border-right-color: #8fc0f2;
+            animation: skew-spin 1.5s linear infinite reverse;
+        }
+        .skew-loading-icon {
+            position: absolute;
+            inset: 17px;
+            border-radius: 50%;
+            background: #005da2;
+            box-shadow: 0 0 0 7px #e6f0fa;          /* the halo */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .skew-loading-icon svg { width: 20px; height: 20px; color: #fff; }
+        .skew-loading-text { font-weight: 700; color: #1f2d3d; font-size: 1rem; letter-spacing: 0.01em; }
         @keyframes skew-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+            .skew-loading-ring::before, .skew-loading-ring::after { animation-duration: 3s; }
+        }
     </style>
     <script>
-        /* SkewLoading.show("Downloading...") / SkewLoading.hide(). Every fetch()
-           to a download / import / upload endpoint shows it automatically. */
+        /* SkewLoading.show("Downloading...", "download") / SkewLoading.hide().
+           Every fetch() to a download / import / upload endpoint, and every
+           file upload (FormData), shows it automatically. */
         (function () {
             let el = null, count = 0, timer = null;
+
+            const svg = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+            const ICONS = {
+                download: svg('<path d="M6 10.5l4 4 8-8"/><path d="M5 19.5h14"/>'),        // tick over a line
+                upload:   svg('<path d="M12 15.5V4.5"/><path d="M7.5 9 12 4.5 16.5 9"/><path d="M5 19.5h14"/>'),
+                plc:      svg('<path d="M12 4.5v11"/><path d="M7.5 11 12 15.5 16.5 11"/><path d="M5 19.5h14"/>'),
+            };
 
             function overlay() {
                 if (!el) {
@@ -61,19 +105,19 @@
                     el.setAttribute("role", "alert");
                     el.setAttribute("aria-live", "assertive");
                     el.innerHTML = `<div class="skew-loading-box">
-                        <div class="skew-loading-spinner"></div>
-                        <div class="skew-loading-text"></div>
-                        <div class="skew-loading-sub">Please wait...</div></div>`;
+                        <div class="skew-loading-ring"><div class="skew-loading-icon"></div></div>
+                        <div class="skew-loading-text"></div></div>`;
                     document.body.appendChild(el);
                 }
                 return el;
             }
 
             const SkewLoading = {
-                show(text) {
+                show(text, kind) {
                     count++;
                     const o = overlay();
                     o.querySelector(".skew-loading-text").textContent = text || "Loading...";
+                    o.querySelector(".skew-loading-icon").innerHTML = ICONS[kind] || ICONS.download;
                     clearTimeout(timer);
                     o.classList.add("show");
                 },
@@ -116,25 +160,31 @@
             };
             window.SkewLoading = SkewLoading;
 
-            // Which requests get the popup, and what it says
+            // Which requests get the popup: [address pattern, message, icon]
             const RULES = [
-                [/import|upload/i, "Importing..."],
-                [/download_recipe/i, "Downloading recipe to PLC..."],
-                [/export|download|backup|\/pdf\b|\/excel\b|_excel\b|\/multi\b/i, "Preparing download..."],
+                [/import|upload/i, "Importing...", "upload"],
+                [/download_recipe/i, "Downloading recipe to PLC...", "plc"],
+                [/export|download|backup|\/pdf\b|\/excel\b|_excel\b|\/multi\b/i, "Preparing download...", "download"],
             ];
             const SKIP = /recipe_download\/preview/i;
 
             const nativeFetch = window.fetch.bind(window);
             window.fetch = function (input, init) {
                 const url = typeof input === "string" ? input : (input && input.url) || "";
-                let text = init && init.skewLoading;
+                let text = init && init.skewLoading, kind = "download";
                 if (!text && !SKIP.test(url)) {
                     const rule = RULES.find(([re]) => re.test(url));
-                    text = rule && rule[1];
+                    if (rule) { text = rule[1]; kind = rule[2]; }
+                    // Any file upload (e.g. the report logo in Settings)
+                    else if (init && typeof FormData !== "undefined" && init.body instanceof FormData) {
+                        text = "Uploading..."; kind = "upload";
+                    }
+                } else if (text && /import|upload/i.test(url)) {
+                    kind = "upload";
                 }
                 if (!text) return nativeFetch(input, init);
 
-                SkewLoading.show(text);
+                SkewLoading.show(text, kind);
                 return nativeFetch(input, init).finally(() => SkewLoading.hide());
             };
         })();
