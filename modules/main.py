@@ -929,7 +929,7 @@ def dashboard_calculations(start_timestamp, end_timestamp, hours):
 
 
 # --------------------------------------------------------------------------
-# Material Catalogue -> Consumption Report
+# Material Master -> Consumption Report
 # --------------------------------------------------------------------------
 CONSUMPTION_COLUMNS = ["Material Name", "Total Set Weight (Tons)",
                        "Total Actual Weight (Tons)", "Loss (Tons)"]

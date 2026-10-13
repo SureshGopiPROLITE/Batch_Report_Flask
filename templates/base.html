@@ -237,11 +237,11 @@
                 </li>
 
                 <li class="{% if request.path == url_for('total_stocks') %}active{% endif %}">
-                    <a href="{{ url_for('total_stocks') }}"><i class="bx bx-library"></i> Material Catalogue</a>
+                    <a href="{{ url_for('total_stocks') }}"><i class="bx bx-library"></i> Material Master</a>
                 </li>
 
                 <li class="{% if request.path == url_for('stocks') %}active{% endif %}">
-                    <a href="{{ url_for('stocks') }}"><i class="bx bxs-layer"></i> Silo Materials</a>
+                    <a href="{{ url_for('stocks') }}"><i class="bx bxs-layer"></i> Location</a>
                 </li>
 
                 <li class="{% if '/analytics' in request.path %}active{% endif %}">

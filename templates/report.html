@@ -71,7 +71,7 @@
   <span><b id="selCount">0</b> batch(es) selected</span>
   <button id="selPdf" class="inv-button primary" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Download PDF</button>
   <button id="selExcel" class="inv-button success" {% if not user_logged_in or role == 'operator' %} disabled title="Access Denied" {% endif %}>Download Excel</button>
-  <button id="selHeader" class="inv-button" title="Batch header (Recipe, Batch No, Start / End, Mixer, Time Taken, weights, Shift, Plant) of the selected batches, as PDF">Export Header</button>
+  <button id="selHeader" class="inv-button" title="Batch label (Recipe, Batch No, Start / End, Mixer, Time Taken, weights, Shift, Plant) of the selected batches, as PDF">Batch Label</button>
   <button id="selClear" class="link-btn">Clear selection</button>
   <span id="selStatus"></span>
 </div>
@@ -108,8 +108,8 @@
       </button>
 
       <button id="downloadHeader" class="inv-button"
-        title="Batch header (the block on top of the batch report) as PDF">
-        Export Header
+        title="Batch label (the block on top of the batch report) as PDF">
+        Batch Label
       </button>
 
       <button id="closePopup" class="inv-button warning">Close</button>
@@ -574,7 +574,7 @@ async function downloadHeader(batch_nos, button) {
     const name = (res.headers.get("Content-Disposition") || "").match(/filename="?([^";]+)"?/);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = name ? name[1] : `BatchHeader_${batch_nos[0]}.pdf`;
+    a.download = name ? name[1] : `BatchLabel_${batch_nos[0]}.pdf`;
     a.click();
     URL.revokeObjectURL(a.href);
   } catch (err) {

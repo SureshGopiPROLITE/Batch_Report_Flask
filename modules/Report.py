@@ -508,7 +508,7 @@ def generate_html_report(
 
 
 # ==========================================================
-# 🔹 Batch header PDF (Report "Export Header")
+# 🔹 Batch header PDF (Report "Batch Label")
 # ==========================================================
 
 def generate_header_pdf(batches):
@@ -517,13 +517,13 @@ def generate_header_pdf(batches):
     batches: their blocks one after another, never split across a page."""
     logo_base64 = encode_logo("data_files/logo.png")
     details = [_report_details(string, cal, no) for no, string, cal in batches]
-    title = "BATCH HEADER" if len(details) == 1 else f"BATCH HEADERS ({len(details)})"
+    title = "BATCH LABEL" if len(details) == 1 else f"BATCH LABELS ({len(details)})"
     blocks = "".join(f'<div class="header-item">{_header_block(d)}</div>' for d in details)
     html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>Batch Header</title>
+<title>Batch Label</title>
 {REPORT_CSS}
 <style>
     .header-item {{ page-break-inside: avoid; }}

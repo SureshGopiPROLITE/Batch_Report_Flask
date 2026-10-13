@@ -1001,7 +1001,7 @@ def api_plc_data_header_pdf():
             return jsonify({"success": False, "error": "Select at least one batch"}), 400
         if len(batch_nos) > HEADER_EXPORT_LIMIT:
             return jsonify({"success": False,
-                            "error": f"{len(batch_nos)} batches selected - header export allows up to {HEADER_EXPORT_LIMIT} at a time"}), 400
+                            "error": f"{len(batch_nos)} batches selected - batch label allows up to {HEADER_EXPORT_LIMIT} at a time"}), 400
 
         batches = []
         for no in batch_nos:
@@ -1012,12 +1012,12 @@ def api_plc_data_header_pdf():
             return jsonify({"success": False, "error": "No data found for the selected batches"}), 404
 
         data = Report.generate_header_pdf(batches)
-        name = (f"BatchHeader_{batches[0][0]}.pdf" if len(batches) == 1
-                else f"BatchHeaders_{len(batches)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+        name = (f"BatchLabel_{batches[0][0]}.pdf" if len(batches) == 1
+                else f"BatchLabels_{len(batches)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
         return send_file(io.BytesIO(data), as_attachment=True, download_name=name,
                          mimetype="application/pdf")
     except Exception as e:
-        logging.exception("Header export failed")
+        logging.exception("Batch label export failed")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -1910,7 +1910,7 @@ def stocks():
     )
 
 
-#  API Route — returns live data for the Silo Materials table
+#  API Route — returns live data for the Location table
 @app.route("/api/stocks", methods=["GET"])
 def get_stocks_data():
     conn = None
@@ -1959,6 +1959,25 @@ def get_stocks_data():
             conn.close()
 
 
+def _catalogue_material(cur, name, code):
+    """(name, code) as written in the Material Master, or (None, error).
+    Location may only use catalogue materials; the code must be the
+    catalogue's code for that name (case / outer spaces ignored)."""
+    name = str(name or "").strip()
+    code = str(code or "").strip()
+    cur.execute('SELECT "MaterialName", "MaterialCode" FROM "MaterialMaster" '
+                'WHERE LOWER(TRIM("MaterialName")) = LOWER(%s)', (name,))
+    row = cur.fetchone()
+    if not row:
+        return None, (f"Material '{name}' is not in the Material Master - "
+                      f"pick one from the list, or add it on the Material Master page first.")
+    cat_code = (row[1] or "").strip()
+    if code.lower() != cat_code.lower():
+        return None, (f"Material code for '{row[0]}' must be '{cat_code or '(blank)'}' "
+                      f"as in the Material Master.")
+    return (row[0].strip(), cat_code), None
+
+
 # Add new stock
 @app.route("/api/stocks/add", methods=["POST"])
 def add_stock():
@@ -1977,11 +1996,15 @@ def add_stock():
         if cursorRead.fetchone():
             return jsonify({"success": False, "error": f"SiloNo {silono} already exists."})
 
+        material, error = _catalogue_material(cursorRead, data.get("MaterialName"), data.get("MaterialCode"))
+        if error:
+            return jsonify({"success": False, "error": error})
+
         cursorWrite.execute("""
             INSERT INTO "MaterialData" ("SiloNo", "MaterialName", "MaterialCode", "OperatorName",
                                         "UpdatedAt")
             VALUES (%s, %s, %s, %s, now())
-        """, (silono, data["MaterialName"], data["MaterialCode"], operator_name))
+        """, (silono, material[0], material[1], operator_name))
 
         conn.commit()
         return jsonify({"success": True})
@@ -2024,13 +2047,23 @@ def update_stock(old_silono):
         material_changed = (clean(current[0]) != clean(data["MaterialName"]) or
                             clean(current[1]) != clean(data["MaterialCode"]))
 
+        # A new material must come from the Material Master. Unchanged
+        # (possibly older, non-catalogue) materials may stay, e.g. when only
+        # the silo number is edited.
+        name, code = clean(current[0]), clean(current[1])
+        if material_changed:
+            material, error = _catalogue_material(cursorRead, data.get("MaterialName"), data.get("MaterialCode"))
+            if error:
+                return jsonify({"success": False, "error": error})
+            name, code = material
+
         cursorWrite.execute("""
             UPDATE "MaterialData"
             SET "SiloNo" = %s, "MaterialName" = %s, "MaterialCode" = %s, "OperatorName" = %s,
                 "TotalExtracted" = CASE WHEN %s THEN '0' ELSE "TotalExtracted" END,
                 "UpdatedAt" = now()
             WHERE "SiloNo" = %s
-        """, (new_silono, data["MaterialName"], data["MaterialCode"], operator_name,
+        """, (new_silono, name, code, operator_name,
               material_changed, old_silono))
 
         conn.commit()
@@ -2135,7 +2168,7 @@ def export_material_data():
 
 
 # ==========================================================
-# Material Catalogue: material master list (name + code). The Silo Materials page
+# Material Master: material master list (name + code). The Location page
 # suggests materials from it.
 # ==========================================================
 
@@ -2318,7 +2351,7 @@ def export_materials():
             df.to_excel(writer, index=False, sheet_name='Materials')
         output.seek(0)
         return send_file(output, as_attachment=True,
-                         download_name=f"SKEW_MaterialCatalogue_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                         download_name=f"SKEW_MaterialMaster_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                          mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -2327,7 +2360,7 @@ def export_materials():
             conn.close()
 
 
-# Material Catalogue -> Consumption Report tab
+# Material Master -> Consumption Report tab
 
 def _consumption_request():
     """(rows DataFrame, batches, search, from, to) for the posted range;

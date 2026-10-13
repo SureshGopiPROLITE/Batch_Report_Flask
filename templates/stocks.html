@@ -3,7 +3,7 @@
 {% block content %}
 <div class="inv-navbar">
   <div class="inv-navbar-left">
-    <span class="inv-app-title">Silo Materials</span>
+    <span class="inv-app-title">Location</span>
   </div>
 
   <div class="inv-navbar-right">
@@ -34,7 +34,7 @@
   </table>
 </div>
 
-<!-- Material suggestions (from the Material Catalogue list) -->
+<!-- Material suggestions (from the Material Master list) -->
 <div id="matSuggest" class="mat-suggest" hidden></div>
 
 <style>
@@ -119,7 +119,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   /* =========================================================
        MATERIAL SUGGESTIONS
        Typing in Material Name or Code lists every material from the
-       Material Catalogue page whose name or code contains the text.
+       Material Master page whose name or code contains the text.
   ========================================================= */
   const suggestBox = document.getElementById("matSuggest");
   // Live on <body>: inside the page content it was clipped by the scrolling area
@@ -162,7 +162,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           </div>`).join("")
       : `<div class="mat-suggest-empty">${materials.length
             ? "No material contains “" + esc(target.anchor.value.trim()) + "”"
-            : "No materials yet - add them on the Material Catalogue page"}</div>`;
+            : "No materials yet - add them on the Material Master page"}</div>`;
     suggestBox._hits = hits;
 
     // Open below the input, or above it when there is more room there
@@ -198,6 +198,29 @@ document.addEventListener("DOMContentLoaded", async () => {
     suggestFor.nameInput.value = m.MaterialName;
     suggestFor.codeInput.value = m.MaterialCode;
     hideSuggestions();
+  }
+
+  // Location may only use Material Master materials: the name and
+  // code must be one catalogue entry (picked from the list). Returns the
+  // entry, or null after telling the user. The server checks this again.
+  const norm = (v) => String(v || "").trim().toLowerCase();
+  function catalogueMaterial(nameInput, codeInput) {
+    const m = materials.find(x => norm(x.MaterialName) === norm(nameInput.value) &&
+                                  norm(x.MaterialCode) === norm(codeInput.value));
+    if (m) return m;
+    const byName = materials.find(x => norm(x.MaterialName) === norm(nameInput.value));
+    alert(byName
+      ? `The code for "${byName.MaterialName}" in the Material Master is "${byName.MaterialCode || "(blank)"}".
+` +
+        `Pick the material from the list so name and code match.`
+      : `"${nameInput.value.trim() || "(empty)"}" is not in the Material Master.
+
+` +
+        `Pick a material from the list (type part of its name or code).
+` +
+        `New materials must be added on the Material Master page first.`);
+    nameInput.focus();
+    return null;
   }
 
   function setActive(i) {
@@ -291,8 +314,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     tr.innerHTML = `
       <td><input type="text" class="edit-input in-silo" placeholder="Silo No"></td>
-      <td><input type="text" class="edit-input in-name" placeholder="Type to search materials"></td>
-      <td><input type="text" class="edit-input in-code" placeholder="Material Code"></td>
+      <td><input type="text" class="edit-input in-name" placeholder="Search the Material Master"></td>
+      <td><input type="text" class="edit-input in-code" placeholder="Filled from Material Master"></td>
       <td><input type="text" class="edit-input" value="0" disabled></td>
       <td><input type="text" class="edit-input" value="" disabled></td>
       <td><input type="text" class="edit-input" value="{{ user or '' }}" disabled></td>
@@ -321,6 +344,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         alert("Fill required fields!");
         return;
       }
+      const m = catalogueMaterial(tr.querySelector(".in-name"), tr.querySelector(".in-code"));
+      if (!m) return;
+      newData.MaterialName = m.MaterialName;
+      newData.MaterialCode = m.MaterialCode;
 
       const res = await fetch("/api/stocks/add", {
         method: "POST",
@@ -375,8 +402,15 @@ document.addEventListener("DOMContentLoaded", async () => {
           MaterialCode: codeInput.value.trim()
         };
 
-        // New material in the silo -> Total Consumption starts again from 0
+        // New material in the silo: must be a catalogue entry (an unchanged,
+        // older material may stay), and Total Consumption starts again from 0
         const oldName = nameInput.defaultValue.trim(), oldCode = codeInput.defaultValue.trim();
+        if (norm(updated.MaterialName) !== norm(oldName) || norm(updated.MaterialCode) !== norm(oldCode)) {
+          const m = catalogueMaterial(nameInput, codeInput);
+          if (!m) return;
+          updated.MaterialName = m.MaterialName;
+          updated.MaterialCode = m.MaterialCode;
+        }
         if ((updated.MaterialName !== oldName || updated.MaterialCode !== oldCode) &&
             !confirm(`Material changed for Silo ${siloNo}:\n` +
                      `${oldName || "-"} (${oldCode || "-"})  ->  ${updated.MaterialName || "-"} (${updated.MaterialCode || "-"})\n\n` +
@@ -460,7 +494,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       .replace("T", "_")   // YYYY-MM-DD_HH:MM
       .replace(/:/g, "-"); // safe filename
 
-    const filename = `SKEW_SiloMaterials_${currentDate}.xlsx`;
+    const filename = `SKEW_Location_${currentDate}.xlsx`;
 
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);

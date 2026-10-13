@@ -104,7 +104,7 @@ def ensure_indexes():
         """SELECT setval('users_id_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM users), 1))""",
         "UPDATE users SET id = nextval('users_id_seq') WHERE id IS NULL",
         "ALTER TABLE users ALTER COLUMN id SET DEFAULT nextval('users_id_seq')",
-        # Silo Materials page: when a silo row was last changed (assign / edit /
+        # Location page: when a silo row was last changed (assign / edit /
         # reset weight); "OperatorName" holds who did it
         'ALTER TABLE "MaterialData" ADD COLUMN IF NOT EXISTS "UpdatedAt" timestamp',
         # A pre-release build kept "who" twice (OperatorName + UpdatedBy):
@@ -117,7 +117,7 @@ def ensure_indexes():
                    ALTER TABLE "MaterialData" DROP COLUMN "UpdatedBy";
                END IF;
            END $$""",
-        # Material Catalogue page: the material master list the Silo Materials page
+        # Material Master page: the material master list the Location page
         # suggests from. Names are unique ignoring case / outer spaces.
         """CREATE TABLE IF NOT EXISTS "MaterialMaster" (
                "Id" serial PRIMARY KEY,
